@@ -549,7 +549,7 @@ export default function Settings() {
                                     </div>
                                     <div onClick={() => setSelection({ type: "WIZARD" })} style={{ ...styles.subItem, paddingLeft: 45, color: colors.success, fontWeight: "bold", background: selection.type === "WIZARD" ? "#094771" : "transparent" }}>+ Adauga Camera (WIZARD)</div>
                                     {expanded.IP_DEVICES && cams.map(c => {
-                                        const isOnline = statusData[c.id]?.connected;
+                                        const isOnline = statusData[c.id]?.connected || statusData[c.id]?.status === "ONLINE";
                                         return (
                                             <div key={"hw_" + c.id} id={`sidebar_hw_${c.id}`} onClick={() => setSelection({ type: "CAMERA", id: c.id })} style={{ ...styles.subItem, paddingLeft: 45, background: (selection.type === "CAMERA" && selection.id === c.id) ? "#094771" : "transparent", fontSize: 12, display: "flex", alignItems: "center" }}>
                                                 <div style={{ width: 6, height: 6, borderRadius: "50%", background: isOnline ? "#4caf50" : "#f44336", marginRight: 8, boxShadow: isOnline ? "0 0 4px #4caf50" : "none" }} />
@@ -570,7 +570,7 @@ export default function Settings() {
                                 <ChevronRight size={14} style={{ transform: expanded.CHANNELS ? "rotate(90deg)" : "rotate(0deg)", transition: "0.2s", marginRight: 5 }} /> Canale
                             </div>
                             {expanded.CHANNELS && cams.map(c => {
-                                const isOnline = statusData[c.id]?.connected;
+                                const isOnline = statusData[c.id]?.connected || statusData[c.id]?.status === "ONLINE";
                                 return (
                                     <div key={"ch_" + c.id} id={`sidebar_ch_${c.id}`} onClick={() => setSelection({ type: "CHANNEL", id: c.id })} style={{ ...styles.subItem, background: (selection.type === "CHANNEL" && selection.id === c.id) ? "#094771" : "transparent", fontSize: 12, display: "flex", alignItems: "center" }}>
                                         <div style={{ width: 6, height: 6, borderRadius: "50%", background: isOnline ? "#4caf50" : "#f44336", marginRight: 8, boxShadow: isOnline ? "0 0 4px #4caf50" : "none" }} />

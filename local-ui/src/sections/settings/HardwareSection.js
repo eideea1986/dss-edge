@@ -191,8 +191,8 @@ export function IPDevicesRootSection({ cams, statusData = {}, onEditCam, onSelec
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                                 <div style={{ fontSize: 13, fontWeight: "bold", color: "#fff" }}>{c.ip}</div>
                                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                                    {statusData[c.id]?.connected ?
-                                        <div style={{ fontSize: 11, color: "#4caf50", background: "rgba(76,175,80,0.1)", padding: "2px 6px", borderRadius: 4 }}>Active ({statusData[c.id].fps || 0} FPS)</div> :
+                                    {(statusData[c.id]?.connected || statusData[c.id]?.status === "ONLINE") ?
+                                        <div style={{ fontSize: 11, color: "#4caf50", background: "rgba(76,175,80,0.1)", padding: "2px 6px", borderRadius: 4 }}>Active ({statusData[c.id]?.fps || 0} FPS)</div> :
                                         <div style={{ fontSize: 11, color: "#f44336", background: "rgba(244,67,54,0.1)", padding: "2px 6px", borderRadius: 4 }}>Offline</div>
                                     }
                                     <div style={{ fontSize: 9, color: "#888", marginTop: 3 }}>
@@ -326,7 +326,7 @@ export function CameraSettingsSection({
                 </div>
 
                 <div style={{ marginBottom: 30, display: "flex", alignItems: "center", gap: 20 }}>
-                    {statusData[cam.id]?.connected ?
+                    {(statusData[cam.id]?.connected || statusData[cam.id]?.status === "ONLINE") ?
                         <div>State: <span style={{ color: "rgb(76, 175, 80)", fontWeight: "bold" }}>Connected</span></div> :
                         <div>State: <span style={{ color: "#f44336", fontWeight: "bold" }}>Disconnected production</span> <span style={{ fontSize: 11, color: "#ffa726", marginLeft: 10 }}>{statusData[cam.id]?.lastError ? <><AlertTriangle size={10} /> {statusData[cam.id].lastError}</> : "(Retry in 5s...)"}</span></div>
                     }

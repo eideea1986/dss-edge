@@ -42,7 +42,11 @@ export default function Live() {
             API.get("status").then(res => {
                 const isOnline = res.data.online === true || res.data.status === "Connected" || res.data.system?.uptime > 0;
                 setStatus(isOnline ? "Connected" : "Disconnected");
-                if (res.data.cameras) setCamStatus(res.data.cameras);
+                if (res.data.cameras) {
+                    const map = {};
+                    res.data.cameras.forEach(c => map[c.id] = { ...c, connected: c.status === "ONLINE" });
+                    setCamStatus(map);
+                }
             }).catch(() => setStatus("Disconnected"));
         };
         checkStatus();
