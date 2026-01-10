@@ -26,20 +26,17 @@ streams:
         const subUrl = (cam.rtspSub || cam.rtsp || "").split('#')[0].trim();
 
         if (hdUrl) {
-            yaml += `  ${cam.id}_hd:\n`;
-            yaml += `    - ${hdUrl}\n`;
-            yaml += `    - ffmpeg:${hdUrl}#video=h264#hardware\n`;
+            yaml += `  ${cam.id}_hd: ${hdUrl}\n`;
         }
         if (subUrl) {
-            yaml += `  ${cam.id}_sub:\n`;
-            yaml += `    - ${subUrl}\n`;
-            yaml += `    - ffmpeg:${subUrl}#video=mjpeg\n`;
+            yaml += `  ${cam.id}_sub: ${subUrl}\n`;
         }
 
+        // Use direct URL for the main ID as well to avoid alias issues
         if (subUrl) {
-            yaml += `  ${cam.id}: [${cam.id}_sub]\n`;
+            yaml += `  ${cam.id}: ${subUrl}\n`;
         } else if (hdUrl) {
-            yaml += `  ${cam.id}: [${cam.id}_hd]\n`;
+            yaml += `  ${cam.id}: ${hdUrl}\n`;
         }
     });
 

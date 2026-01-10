@@ -60,14 +60,18 @@ export default function App() {
     return (
         <HashRouter>
             <style>{`
-                /* GRID FILL FIX */
-                video, img, canvas, .rtc-player {
+                /* GRID FILL FIX - ULTRA AGGRESSIVE */
+                video, img, canvas, .rtc-player, .rtc-player-el {
                     object-fit: fill !important; 
                     width: 100% !important; 
                     height: 100% !important;
                     display: block !important;
                     min-width: 100% !important;
                     min-height: 100% !important;
+                }
+                .rtc-player div {
+                    width: 100% !important;
+                    height: 100% !important;
                 }
                 body { margin: 0; padding: 0; background: #000; overflow: hidden; }
             `}</style>

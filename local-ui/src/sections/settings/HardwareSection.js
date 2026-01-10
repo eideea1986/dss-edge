@@ -9,28 +9,10 @@ const videoStyle = { width: "100%", height: "100%" };
 
 // Sub-component for auto-refreshing preview (Snapshot Mode for Performance)
 export function LivePreview({ camId, active = true }) {
-    const [tick, setTick] = useState(0);
-
-    useEffect(() => {
-        if (!active) return;
-        const interval = setInterval(() => setTick(t => t + 1), 3000); // Refresh every 3s
-        return () => clearInterval(interval);
-    }, [active]);
-
     if (!active) return <div style={{ width: "100%", height: "100%", background: "#000" }} />;
-
-    // Use Go2RTC frame API. Port 1984 is standard. Adjust IP if needed dynamically, but hardcoded for stability now.
-    // Use relative path through the local-api proxy to avoid CORS/IP issues
-    const snapshotUrl = `/rtc/api/frame.jpeg?src=${camId}_sub&_t=${tick}`;
-
     return (
         <div style={{ width: "100%", height: "100%", background: "#000", overflow: "hidden" }}>
-            <img
-                src={snapshotUrl}
-                alt={camId}
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                onError={(e) => { e.target.style.display = 'none'; }}
-            />
+            <Go2RTCPlayer camId={camId} streamType="sub" />
         </div>
     );
 }
