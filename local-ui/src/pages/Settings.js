@@ -263,7 +263,7 @@ export default function Settings() {
 
     const deleteCam = async (id) => {
         if (!window.confirm("Delete camera?")) return;
-        try { await API.delete(`/cameras/config/${id}`); setSelection({ type: "IP_DEVICES_ROOT" }); loadCams(); }
+        try { await API.delete(`/cameras/${id}`); setSelection({ type: "IP_DEVICES_ROOT" }); loadCams(); }
         catch (e) { alert("Error deleting: " + e.message); }
     };
 
@@ -444,7 +444,11 @@ export default function Settings() {
             case "SYSTEM_LOGS": return <SystemLogsSection />;
             case "MAINTENANCE_SERVICES": return <ServiceMaintenanceSection services={services} onRestartStack={handleRestartStack} />;
             case "MAINTENANCE_REBOOT": return <RebootSection />;
-            case "WIZARD": return <CameraWizard onUpdate={loadCams} onFinish={() => { loadCams(); setSelection({ type: "IP_DEVICES_ROOT" }); }} />;
+            case "WIZARD": return <CameraWizard
+                onUpdate={loadCams}
+                onFinish={() => { loadCams(); setSelection({ type: "IP_DEVICES_ROOT" }); }}
+                onOpenSetup={(newCam) => { setEditCam(newCam || {}); setIsEditModalOpen(true); }}
+            />;
             case "ARMING_SCHEDULES": return <ScheduleEditor schedules={armingSchedules} onSave={handleSaveSchedules} />;
             case "ARMING_MATRIX": return <ArmingMatrix schedules={armingSchedules} cams={cams} assignments={armingAssignments} modes={armingModes} labels={armingLabels} onSave={handleSaveAssignments} onSaveModes={handleSaveModes} onSaveLabels={handleSaveLabels} onToggleSchedule={handleToggleSchedule} />;
             default: return <div style={{ padding: 20 }}>Select an item from the sidebar</div>;
@@ -610,10 +614,19 @@ export default function Settings() {
                     manufacturers={MANUFACTURERS}
                     onClose={() => setIsEditModalOpen(false)}
                     onSave={async () => {
-                        const updated = cams.map(c => c.id === editCam.id ? editCam : c);
-                        await API.post("/cameras/config", updated);
-                        setIsEditModalOpen(false);
-                        loadCams();
+                        try {
+                            if (editCam.id && cams.some(c => c.id === editCam.id)) {
+                                const updated = cams.map(c => c.id === editCam.id ? editCam : c);
+                                await API.post("/cameras/config", updated);
+                            } else {
+                                await API.post("/cameras/add", editCam);
+                                setSelection({ type: "IP_DEVICES_ROOT" }); // Redirect to list after add
+                            }
+                            setIsEditModalOpen(false);
+                            loadCams();
+                        } catch (e) {
+                            alert("Save Error: " + (e.response?.data?.error || e.message));
+                        }
                     }}
                 />
             )}

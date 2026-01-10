@@ -18,9 +18,9 @@ export default function Go2RTCPlayer({ camId, streamType = 'hd', style, onClick,
     useEffect(() => {
         if (useMjpeg) return;
 
-        // Correct suffix based on Go2RTCService naming convention (_sub vs _hd)
-        const suffix = activeStreamType === 'hd' ? '_hd' : '_sub';
-        const streamName = `${camId}${suffix}`;
+        // FIX: Match the exact stream name registered by startStream.js
+        // We currently register just the camId without _hd/_sub suffixes
+        const streamName = `${camId}_${activeStreamType}`;
 
         const connectWebRTC = async () => {
             setStatus("connecting");
@@ -85,11 +85,7 @@ export default function Go2RTCPlayer({ camId, streamType = 'hd', style, onClick,
         >
             {useMjpeg ? (
                 <img
-                    src={`/rtc/api/stream.mjpeg?src=${camId}_sub`}
-                    onError={(e) => {
-                        // If sub mjpeg fails, try main
-                        if (!e.target.src.includes('_hd')) e.target.src = `/rtc/api/stream.mjpeg?src=${camId}_hd`;
-                    }}
+                    src={`/rtc/api/stream.mjpeg?src=${camId}`}
                     style={{ width: "100%", height: "100%", objectFit: "fill", display: "block" }}
                     alt="Live Stream"
                 />
