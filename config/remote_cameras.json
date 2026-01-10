@@ -1,0 +1,1064 @@
+[
+  {
+    "id": "cam_192_168_120_129",
+    "name": "Depozit productie robot",
+    "ip": "192.168.120.129",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.129:554/Streaming/Channels/102",
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.129:554/Streaming/Channels/101",
+    "rtspSub": "rtsp://admin:a1b2c3d4@192.168.120.129:554/Streaming/Channels/102",
+    "enabled": true,
+    "storagePath": "/recorder/segments/5c887d9f-bc57-4acb-9f6a-9a97776f2ed2",
+    "physicalPath": "/opt/dss-edge/recorder/segments/5c887d9f-bc57-4acb-9f6a-9a97776f2ed2",
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 20,
+    "motion": false,
+    "gop": 20,
+    "resolution": "2560x1440",
+    "codec": "H.265",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              0.07150837988826815,
+              0.18552036199095023
+            ],
+            [
+              0.8916201117318435,
+              0.2171945701357466
+            ],
+            [
+              0.9027932960893855,
+              0.8552036199095022
+            ],
+            [
+              0.09385474860335195,
+              0.8144796380090498
+            ]
+          ],
+          "objects": {
+            "person": true
+          }
+        }
+      ],
+      "enabled": true
+    }
+  },
+  {
+    "id": "cam_192_168_120_141",
+    "ip": "192.168.120.141",
+    "port": "80",
+    "user": "admin",
+    "pass": "admin",
+    "manufacturer": "Trassir",
+    "model": "Generic ONVIF",
+    "rtsp": "rtsp://admin:admin@192.168.120.141:554/live/sub",
+    "name": "Sediu nou spate trassir",
+    "enabled": true,
+    "storagePath": "/recorder/segments/5bbb3a99-8d46-4329-86bf-64e2ce6858a7",
+    "physicalPath": "/opt/dss-edge/recorder/segments/5bbb3a99-8d46-4329-86bf-64e2ce6858a7",
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 3,
+    "motion": false,
+    "recordingMode": "continuous"
+  },
+  {
+    "id": "cam_192_168_120_139",
+    "ip": "192.168.120.139",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "DS-2CD2047G2-L",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.139:554/Streaming/Channels/102",
+    "name": "Sediu nou fata",
+    "enabled": true,
+    "storagePath": "/recorder/segments/9d7f81fc-d635-44ae-a6e3-85a77aa46d95",
+    "physicalPath": "/opt/dss-edge/recorder/segments/9d7f81fc-d635-44ae-a6e3-85a77aa46d95",
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 3,
+    "motion": false,
+    "codec": "H.264",
+    "gop": 20,
+    "resolution": "1920x1080",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              0.008938547486033519,
+              0.4230769230769231
+            ],
+            [
+              0.0111731843575419,
+              0.9864253393665159
+            ],
+            [
+              689.6000061035156,
+              431
+            ],
+            [
+              567.6000061035156,
+              130
+            ],
+            [
+              0.46145251396648046,
+              0.13122171945701358
+            ]
+          ],
+          "objects": {
+            "person": true,
+            "car": true
+          }
+        }
+      ],
+      "enabled": true
+    },
+    "recordingMode": "continuous"
+  },
+  {
+    "id": "cam_192_168_120_135",
+    "ip": "192.168.120.135",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "DS-2CD2047G2-L",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.135:554/Streaming/Channels/102",
+    "name": "Sediu nou stanga fata",
+    "enabled": true,
+    "storagePath": "/recorder/segments/17b58348-def9-4b6a-af12-f6a799fe0b2d",
+    "physicalPath": "/opt/dss-edge/recorder/segments/17b58348-def9-4b6a-af12-f6a799fe0b2d",
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 20,
+    "motion": false,
+    "gop": 15,
+    "resolution": "2688x1520",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              0.05810055865921788,
+              0.15610859728506787
+            ],
+            [
+              0.8022346368715084,
+              0.11085972850678733
+            ],
+            [
+              0.8938547486033519,
+              0.7737556561085973
+            ],
+            [
+              0.11620111731843576,
+              0.8393665158371041
+            ]
+          ],
+          "objects": {
+            "person": true,
+            "car": true
+          }
+        }
+      ],
+      "enabled": true
+    },
+    "codec": "H.264"
+  },
+  {
+    "id": "cam_192_168_120_143",
+    "ip": "192.168.120.143",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "DS-2CD1047G0-L",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.143:554/Streaming/Channels/102",
+    "name": "Dispecerat hol",
+    "enabled": true,
+    "storagePath": "/recorder/segments/02d95491-3e17-486a-937a-5753fc271f9b",
+    "physicalPath": "/opt/dss-edge/recorder/segments/02d95491-3e17-486a-937a-5753fc271f9b",
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 2,
+    "motion": false,
+    "gop": 20,
+    "resolution": "2560x1440",
+    "codec": "H.264",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              0.0893854748603352,
+              0.24660633484162897
+            ],
+            [
+              0.8201117318435754,
+              0.251131221719457
+            ],
+            [
+              0.8849162011173184,
+              0.7895927601809954
+            ],
+            [
+              0.07597765363128492,
+              0.9570135746606335
+            ]
+          ],
+          "objects": {
+            "person": true
+          }
+        }
+      ],
+      "enabled": true
+    }
+  },
+  {
+    "id": "cam_192_168_120_131",
+    "ip": "192.168.120.131",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Dahua",
+    "model": "IPC-HDW1230T1-S4",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.131:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "Sediu nou hol parter",
+    "enabled": true,
+    "storagePath": "/recorder/segments/f70ce662-bd75-4aa1-8fdb-d2cacebed009",
+    "physicalPath": "/opt/dss-edge/recorder/segments/f70ce662-bd75-4aa1-8fdb-d2cacebed009",
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 2,
+    "motion": false,
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              0.5072625698324023,
+              0.13122171945701358
+            ],
+            [
+              0.8849162011173184,
+              0.19004524886877827
+            ],
+            [
+              0.7318435754189944,
+              0.9117647058823529
+            ],
+            [
+              0.18435754189944134,
+              0.9886877828054299
+            ]
+          ],
+          "objects": {
+            "person": true
+          }
+        }
+      ],
+      "enabled": true
+    }
+  },
+  {
+    "id": "cam_192_168_120_132",
+    "ip": "192.168.120.132",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "DS-2CD1047G0-L",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.132:554/Streaming/Channels/102",
+    "name": "Dan tiruri2",
+    "enabled": true,
+    "storagePath": "/recorder/segments/e7d48086-5f09-4d06-ac7e-8e109c48da46",
+    "physicalPath": "/opt/dss-edge/recorder/segments/e7d48086-5f09-4d06-ac7e-8e109c48da46",
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 3,
+    "motion": false,
+    "gop": 20,
+    "rtspHd": "rtsp://admin:a1b2c3d4@192.168.120.132:554/Streaming/Channels/101",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              0.1418994413407821,
+              0.19230769230769232
+            ],
+            [
+              0.8592178770949721,
+              0.17420814479638008
+            ],
+            [
+              0.924022346368715,
+              0.6515837104072398
+            ],
+            [
+              0.12067039106145251,
+              0.8823529411764706
+            ]
+          ],
+          "objects": {
+            "person": true
+          }
+        }
+      ],
+      "enabled": true
+    },
+    "codec": "H.264",
+    "resolution": "2560x1440"
+  },
+  {
+    "id": "cam_192_168_120_133",
+    "ip": "192.168.120.133",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "DS-2CD1047G0-L",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.133:554/Streaming/Channels/102",
+    "name": "Dan tiruri",
+    "enabled": true,
+    "storagePath": "/recorder/segments/e157e2ed-0a6d-4ccd-98ee-352e13243ff5",
+    "physicalPath": "/opt/dss-edge/recorder/segments/e157e2ed-0a6d-4ccd-98ee-352e13243ff5",
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 2,
+    "motion": false,
+    "rtspHd": "rtsp://admin:a1b2c3d4@192.168.120.133:554/Streaming/Channels/101",
+    "gop": 20,
+    "codec": "H.264",
+    "resolution": "2560x1440",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              0.9787709497206704,
+              0.9547511312217195
+            ],
+            [
+              0.982122905027933,
+              0.01583710407239819
+            ],
+            [
+              0.02346368715083799,
+              0.06561085972850679
+            ],
+            [
+              0.02011173184357542,
+              0.9592760180995475
+            ]
+          ],
+          "objects": {
+            "car": true,
+            "person": true
+          }
+        }
+      ],
+      "enabled": true
+    }
+  },
+  {
+    "id": "cam_192_168_120_134",
+    "ip": "192.168.120.134",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Trassir",
+    "model": "Generic ONVIF",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.134:554/live/sub",
+    "name": "Trassir",
+    "enabled": true,
+    "storagePath": "/recorder/segments/fb9ac9a9-46ee-470f-bbf7-b82fac256957",
+    "physicalPath": "/opt/dss-edge/recorder/segments/fb9ac9a9-46ee-470f-bbf7-b82fac256957",
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 2,
+    "motion": false,
+    "rtspHd": "rtsp://admin:admin@192.168.120.134:554/live/main",
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.134:554/live/main"
+  },
+  {
+    "id": "cam_192_168_120_136",
+    "ip": "192.168.120.136",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "DS-2CD2047G2-L",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.136:554/Streaming/Channels/102",
+    "name": "Sediu nou dreapta",
+    "enabled": true,
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 2,
+    "motion": false,
+    "storagePath": "/recorder/segments/6ececd26-3d56-4d5b-8c41-cb7f0beec712",
+    "physicalPath": "/opt/dss-edge/recorder/segments/6ececd26-3d56-4d5b-8c41-cb7f0beec712",
+    "rtspHd": "rtsp://admin:a1b2c3d4@192.168.120.136:554/Streaming/Channels/101",
+    "gop": 15,
+    "record": true,
+    "codec": "H.264",
+    "resolution": "2688x1520",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              0.2011173184357542,
+              0.09049773755656108
+            ],
+            [
+              0.9787709497206704,
+              0.19230769230769232
+            ],
+            [
+              0.9508379888268157,
+              0.6402714932126696
+            ],
+            [
+              0.1877094972067039,
+              0.9909502262443439
+            ],
+            [
+              0.0022346368715083797,
+              0.3190045248868778
+            ]
+          ],
+          "objects": {
+            "person": true,
+            "car": true,
+            "truck": true
+          }
+        }
+      ],
+      "enabled": true
+    }
+  },
+  {
+    "id": "cam_192_168_120_138",
+    "ip": "192.168.120.138",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "DS-2CD2047G2-L",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.138:554/Streaming/Channels/102",
+    "name": "Sediu nou AC",
+    "enabled": true,
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 2,
+    "motion": false,
+    "storagePath": "/recorder/segments/f94cf1aa-2a68-42c1-8655-a36d8f2afb8f",
+    "physicalPath": "/opt/dss-edge/recorder/segments/f94cf1aa-2a68-42c1-8655-a36d8f2afb8f",
+    "rtspHd": "rtsp://admin:a1b2c3d4@192.168.120.138:554/Streaming/Channels/101",
+    "gop": 15,
+    "codec": "H.264",
+    "resolution": "2688x1520",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [],
+          "objects": {
+            "person": true,
+            "truck": true,
+            "car": true
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "cam_192_168_120_144",
+    "ip": "192.168.120.144",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "DS-2CD1047G0-L",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.144:554/Streaming/Channels/102",
+    "name": "Dispecerat",
+    "enabled": true,
+    "storagePath": "/recorder/segments/51f85b04-8b78-4b0a-99b0-32e79907d4ac",
+    "physicalPath": "/opt/dss-edge/recorder/segments/51f85b04-8b78-4b0a-99b0-32e79907d4ac",
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "gop": 20,
+    "codec": "H.264",
+    "resolution": "2560x1440",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              0.08446928056258729,
+              0.14027149321266968
+            ],
+            [
+              0.8610055934117493,
+              0.15384615384615385
+            ],
+            [
+              0.8569832402234637,
+              0.8122171945701357
+            ],
+            [
+              0.10726256983240223,
+              0.7647058823529411
+            ],
+            [
+              0.0782122905027933,
+              0.4660633484162896
+            ]
+          ],
+          "objects": {
+            "person": true,
+            "car": true,
+            "truck": true
+          }
+        }
+      ],
+      "enabled": true
+    },
+    "recordingMode": "continuous",
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.144:554/Streaming/Channels/102"
+  },
+  {
+    "id": "cam_192_168_120_145",
+    "ip": "192.168.120.145",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Dahua",
+    "model": "IPC-T1B20",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.145:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "Sediu nou etaj scari",
+    "enabled": true,
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 2,
+    "motion": false,
+    "storagePath": "/recorder/segments/0c3a7c00-dd49-4df9-924a-3b067a3c3740",
+    "physicalPath": "/opt/dss-edge/recorder/segments/0c3a7c00-dd49-4df9-924a-3b067a3c3740",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              0.10949720670391061,
+              0.167420814479638
+            ],
+            [
+              0.958659217877095,
+              0.2850678733031674
+            ],
+            [
+              0.9608938547486033,
+              0.8755656108597285
+            ],
+            [
+              0.048044692737430165,
+              0.9117647058823529
+            ]
+          ],
+          "objects": {
+            "person": true
+          }
+        }
+      ],
+      "enabled": true
+    }
+  },
+  {
+    "id": "cam_192_168_120_146",
+    "ip": "192.168.120.146",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Dahua",
+    "model": "IPC-HFW2431T-AS-S2",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.146:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "Hala lemn CNC",
+    "enabled": true,
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "storagePath": "/recorder/segments/1d641c34-7527-481e-8498-78713cfc2b9a",
+    "physicalPath": "/opt/dss-edge/recorder/segments/1d641c34-7527-481e-8498-78713cfc2b9a",
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.146:554/cam/realmonitor?channel=1&subtype=0"
+  },
+  {
+    "id": "cam_192_168_120_147",
+    "ip": "192.168.120.147",
+    "port": 554,
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Generic RTSP",
+    "model": "",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.147:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "Afini 2",
+    "enabled": true,
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 1,
+    "motion": false,
+    "storagePath": "/recorder/segments/50367369-4b1a-403f-b777-0e3f4b376161",
+    "physicalPath": "/opt/dss-edge/recorder/segments/50367369-4b1a-403f-b777-0e3f4b376161",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              0.09497206703910614,
+              0.167420814479638
+            ],
+            [
+              0.929608938547486,
+              0.19457013574660634
+            ],
+            [
+              0.9743016759776536,
+              0.8574660633484162
+            ],
+            [
+              0.04022346368715084,
+              0.9638009049773756
+            ]
+          ],
+          "objects": {
+            "person": true,
+            "truck": true,
+            "car": true
+          }
+        }
+      ],
+      "enabled": true
+    }
+  },
+  {
+    "id": "cam_192_168_120_148",
+    "ip": "192.168.120.148",
+    "port": 554,
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Generic RTSP",
+    "model": "",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.148:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "Afini 3",
+    "enabled": true,
+    "storagePath": "/recorder/segments/0241eb1c-34bb-4ce9-830f-f1372acba2c3",
+    "physicalPath": "/opt/dss-edge/recorder/segments/0241eb1c-34bb-4ce9-830f-f1372acba2c3",
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 1,
+    "motion": false
+  },
+  {
+    "id": "cam_192_168_120_187",
+    "ip": "192.168.120.187",
+    "port": 554,
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Generic RTSP",
+    "model": "",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.187:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "Afini 4",
+    "enabled": true,
+    "storagePath": "/recorder/segments/8dea7596-e417-49ec-a4b8-32b82849a44d",
+    "physicalPath": "/opt/dss-edge/recorder/segments/8dea7596-e417-49ec-a4b8-32b82849a44d",
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.187:554/cam/realmonitor?channel=1&subtype=0"
+  },
+  {
+    "id": "cam_192_168_120_128",
+    "ip": "192.168.120.128",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "DS-2CD1041G0-I",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.128:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "Hala productie wire",
+    "enabled": true,
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "storagePath": "/recorder/segments/f97e08c8-f03e-4e4d-a3db-a5010bb4e685",
+    "physicalPath": "/opt/dss-edge/recorder/segments/f97e08c8-f03e-4e4d-a3db-a5010bb4e685",
+    "resolution": "2560x1440",
+    "codec": "H.264",
+    "gop": 20,
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.128:554/cam/realmonitor?channel=1&subtype=0"
+  },
+  {
+    "id": "cam_192_168_120_186",
+    "ip": "192.168.120.186",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.186:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "Afini",
+    "enabled": true,
+    "storagePath": "/recorder/segments/bea9577c-4cce-455c-b28b-7b09c4b4eb87",
+    "physicalPath": "/opt/dss-edge/recorder/segments/bea9577c-4cce-455c-b28b-7b09c4b4eb87",
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "resolution": "2560x1440",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [],
+          "objects": {}
+        }
+      ]
+    },
+    "codec": "H.264",
+    "gop": 15,
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.186:554/cam/realmonitor?channel=1&subtype=0"
+  },
+  {
+    "id": "cam_192_168_120_185",
+    "ip": "192.168.120.185",
+    "port": 8000,
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "HWI-T229H",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.185:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "Acasa spate dreapta",
+    "enabled": true,
+    "storagePath": "/recorder/segments/18c66540-33fc-46ba-bf56-98141bdd3775",
+    "physicalPath": "/opt/dss-edge/recorder/segments/18c66540-33fc-46ba-bf56-98141bdd3775",
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "resolution": "1920x1080",
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [],
+          "objects": {}
+        }
+      ]
+    },
+    "codec": "H.264",
+    "gop": 25,
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.185:554/cam/realmonitor?channel=1&subtype=0"
+  },
+  {
+    "id": "cam_192_168_120_184",
+    "ip": "192.168.120.184",
+    "port": "8000",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "HWI-T229H",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.184:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "RTSP Device (192.168.120.184)",
+    "enabled": true,
+    "storagePath": "/recorder/segments/2a896e6e-39ad-44d3-80f6-b5c26f531445",
+    "physicalPath": "/opt/dss-edge/recorder/segments/2a896e6e-39ad-44d3-80f6-b5c26f531445",
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "resolution": "1920x1080",
+    "codec": "H.264",
+    "gop": 25,
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [],
+          "objects": {}
+        }
+      ],
+      "enabled": true
+    },
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.184:554/cam/realmonitor?channel=1&subtype=0"
+  },
+  {
+    "id": "cam_192_168_120_183",
+    "ip": "192.168.120.183",
+    "port": "8000",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "HWI-T229H",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.183:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "RTSP Device (192.168.120.183)",
+    "enabled": true,
+    "storagePath": "/recorder/segments/28c9f999-b5bf-484d-94fe-82af277f9017",
+    "physicalPath": "/opt/dss-edge/recorder/segments/28c9f999-b5bf-484d-94fe-82af277f9017",
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "resolution": "1920x1080",
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.183:554/cam/realmonitor?channel=1&subtype=0"
+  },
+  {
+    "id": "cam_192_168_120_182",
+    "ip": "192.168.120.182",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "HWI-T229H",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.182:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "RTSP Device (192.168.120.182)",
+    "enabled": true,
+    "storagePath": "/recorder/segments/1fa49fd9-4273-481e-91e6-7b1b270b8f07",
+    "physicalPath": "/opt/dss-edge/recorder/segments/1fa49fd9-4273-481e-91e6-7b1b270b8f07",
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "resolution": "1920x1080",
+    "codec": "H.264",
+    "gop": 25,
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.182:554/cam/realmonitor?channel=1&subtype=0"
+  },
+  {
+    "id": "cam_192_168_120_181",
+    "ip": "192.168.120.181",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "HWI-T229H",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.181:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "RTSP Device (192.168.120.181)",
+    "enabled": true,
+    "storagePath": "/recorder/segments/6219e9f8-47c6-4255-90ca-11d4bf1eb812",
+    "physicalPath": "/opt/dss-edge/recorder/segments/6219e9f8-47c6-4255-90ca-11d4bf1eb812",
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "resolution": "1920x1080",
+    "codec": "H.264",
+    "gop": 25,
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.181:554/cam/realmonitor?channel=1&subtype=0"
+  },
+  {
+    "id": "cam_192_168_120_180",
+    "ip": "192.168.120.180",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "HWI-T229H",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.180:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "Acasa fata",
+    "enabled": true,
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "storagePath": "/recorder/segments/8e4c0ef4-e4b3-4887-84d9-21abf8fe0841",
+    "physicalPath": "/opt/dss-edge/recorder/segments/8e4c0ef4-e4b3-4887-84d9-21abf8fe0841",
+    "resolution": "1920x1080",
+    "codec": "H.264",
+    "gop": 25,
+    "ai_server": {
+      "zones": [
+        {
+          "name": "Zone 1",
+          "points": [
+            [
+              117.60000610351562,
+              86
+            ],
+            [
+              618.6000061035156,
+              104
+            ],
+            [
+              822.6000061035156,
+              399
+            ],
+            [
+              136.60000610351562,
+              420
+            ]
+          ],
+          "objects": {}
+        }
+      ],
+      "enabled": true
+    },
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.180:554/cam/realmonitor?channel=1&subtype=0"
+  },
+  {
+    "id": "cam_192_168_120_101",
+    "ip": "192.168.120.101",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "IPC-B140HAP-LUF/SL",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.101:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "Sediu Medianet curte",
+    "enabled": true,
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "codec": "H.264",
+    "resolution": "2560x1440",
+    "gop": 50,
+    "storagePath": "/recorder/segments/037d68d0-481e-4ce1-918f-76db6e4ffc6d",
+    "physicalPath": "/opt/dss-edge/recorder/segments/037d68d0-481e-4ce1-918f-76db6e4ffc6d",
+    "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.101:554/cam/realmonitor?channel=1&subtype=0"
+  },
+  {
+    "id": "cam_192_168_120_112",
+    "ip": "192.168.120.112",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Dahua",
+    "model": "IPC-model",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.112:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "NVT",
+    "enabled": true,
+    "storagePath": "/recorder/segments/76099b25-3500-42dc-865c-3bdc40597456",
+    "physicalPath": "/opt/dss-edge/recorder/segments/76099b25-3500-42dc-865c-3bdc40597456",
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false
+  },
+  {
+    "id": "cam_192_168_120_110",
+    "ip": "192.168.120.110",
+    "port": "80",
+    "user": "admin",
+    "pass": "admin",
+    "manufacturer": "Dahua",
+    "model": "600115002-IPC-H1502",
+    "rtsp": "rtsp://admin:admin@192.168.120.110:554/live/sub",
+    "name": "Sediu",
+    "enabled": true,
+    "storagePath": "/recorder/segments/26547830-d6c1-4139-a8ad-c6bf4d36f3bb",
+    "physicalPath": "/opt/dss-edge/recorder/segments/26547830-d6c1-4139-a8ad-c6bf4d36f3bb",
+    "connected": false,
+    "statusInfo": "Offline",
+    "fps": 0,
+    "motion": false,
+    "rtspMain": "rtsp://admin:admin@192.168.120.110:554/live/main"
+  },
+  {
+    "id": "cam_192_168_120_124",
+    "ip": "192.168.120.124",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Dahua",
+    "model": "IPC-B1B20",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.124:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "EZIP",
+    "enabled": true,
+    "storagePath": "/recorder/segments/ed57aff5-e864-4f9e-af84-77196f9072be",
+    "physicalPath": "/opt/dss-edge/recorder/segments/ed57aff5-e864-4f9e-af84-77196f9072be",
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 3,
+    "motion": false
+  },
+  {
+    "id": "cam_192_168_120_123",
+    "ip": "192.168.120.123",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Dahua",
+    "model": "Generic ONVIF",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.123:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "EZIP",
+    "enabled": true,
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 2,
+    "motion": false,
+    "storagePath": "/recorder/segments/67e93858-7b61-4361-8faa-c750c388a5f3",
+    "physicalPath": "/opt/dss-edge/recorder/segments/67e93858-7b61-4361-8faa-c750c388a5f3"
+  },
+  {
+    "id": "cam_192_168_120_127",
+    "ip": "192.168.120.127",
+    "port": 554,
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "Hikvision",
+    "model": "DS-2CD2047G2-L",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.123:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "RTSP Device (192.168.120.127)",
+    "enabled": true,
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 2,
+    "motion": false,
+    "storagePath": "/recorder/segments/02663ce6-7d72-45e6-8e19-52d68331eb19",
+    "physicalPath": "/opt/dss-edge/recorder/segments/02663ce6-7d72-45e6-8e19-52d68331eb19",
+    "codec": "H.264",
+    "resolution": "2304x1296",
+    "gop": 20
+  },
+  {
+    "id": "cam_192_168_120_130",
+    "ip": "192.168.120.130",
+    "port": "80",
+    "user": "admin",
+    "pass": "a1b2c3d4",
+    "manufacturer": "EZIP",
+    "model": "IPC-T1B20",
+    "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.130:554/cam/realmonitor?channel=1&subtype=1",
+    "name": "EZIP",
+    "enabled": true,
+    "connected": true,
+    "statusInfo": "Active",
+    "fps": 3,
+    "motion": false,
+    "storagePath": "/recorder/segments/0d42910a-f452-485f-b9fb-b9a4a401cede",
+    "physicalPath": "/opt/dss-edge/recorder/segments/0d42910a-f452-485f-b9fb-b9a4a401cede"
+  }
+]

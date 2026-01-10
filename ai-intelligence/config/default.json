@@ -1,0 +1,55 @@
+{
+    "server": {
+        "port": 5050,
+        "log_level": "info"
+    },
+    "database": {
+        "host": "localhost",
+        "port": 3306,
+        "database": "dss_edge",
+        "user": "dss_user",
+        "password": "dss_password_2025"
+    },
+    "dispatch": {
+        "url": "http://localhost:8080",
+        "websocket": "ws://localhost:8080/events",
+        "api_endpoint": "/api/events/intelligence"
+    },
+    "default": {
+        "false_detection_filter": {
+            "enabled": true,
+            "detection_count_before_ignore": 2,
+            "ignore_duration_seconds": 300,
+            "stability_frames": 3,
+            "motion_only": true,
+            "min_displacement_pixels": 15
+        },
+        "event_manager": {
+            "cooldown_seconds": 60,
+            "aggregation_window_seconds": 5,
+            "max_events_per_minute": 10,
+            "priority": "normal"
+        },
+        "object_tracker": {
+            "enabled": true,
+            "max_lost_frames": 10,
+            "iou_threshold": 0.3,
+            "min_confidence": 0.7,
+            "max_distance_pixels": 100
+        }
+    },
+    "cameras": {
+        "cam_192_168_120_141": {
+            "name": "Exterior Camera 1",
+            "type": "exterior",
+            "false_detection_filter": {
+                "detection_count_before_ignore": 3,
+                "stability_frames": 5,
+                "min_displacement_pixels": 20
+            },
+            "event_manager": {
+                "cooldown_seconds": 120
+            }
+        }
+    }
+}

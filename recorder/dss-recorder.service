@@ -1,0 +1,14 @@
+[Unit]
+Description=DSS SmartGuard Recorder V3
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node /opt/dss-edge/recorder/recorder.js
+WorkingDirectory=/opt/dss-edge/recorder
+Restart=always
+RestartSec=5
+User=root
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

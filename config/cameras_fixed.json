@@ -1,0 +1,156 @@
+[
+    {
+        "id": "cam_192_168_120_139",
+        "name": "Camera 192.168.120.139",
+        "ip": "192.168.120.139",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.139:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_135",
+        "name": "Sediu nous stanga fata",
+        "ip": "192.168.120.135",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.135:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_144",
+        "name": "HIKVISION%20DS-2CD1047G0-L",
+        "ip": "192.168.120.144",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.144:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_142",
+        "name": "RTSP Device (192.168.120.142)",
+        "ip": "192.168.120.142",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.142:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_183",
+        "name": "Hikvision SDK Device (192.168.120.183)",
+        "ip": "192.168.120.183",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.183:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_184",
+        "name": "Hikvision SDK Device (192.168.120.184)",
+        "ip": "192.168.120.184",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.184:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_185",
+        "name": "RTSP Device (192.168.120.185)",
+        "ip": "192.168.120.185",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.185:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_186",
+        "name": "RTSP Device (192.168.120.186)",
+        "ip": "192.168.120.186",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.186:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_182",
+        "name": "Hikvision SDK Device (192.168.120.182)",
+        "ip": "192.168.120.182",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.182:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_181",
+        "name": "Hikvision SDK Device (192.168.120.181)",
+        "ip": "192.168.120.181",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.181:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_143",
+        "name": "HIKVISION%20DS-2CD1047G0-L",
+        "ip": "192.168.120.143",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.143:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_110",
+        "name": "Camera 192.168.120.110",
+        "ip": "192.168.120.110",
+        "port": 80,
+        "user": "admin",
+        "pass": "admin",
+        "manufacturer": "Trassir",
+        "rtsp": "rtsp://admin:admin@192.168.120.110:554/live/sub",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_141",
+        "name": "TR-D2221WDCL4",
+        "ip": "192.168.120.141",
+        "port": 80,
+        "user": "admin",
+        "pass": "admin",
+        "manufacturer": "Trassir",
+        "rtsp": "rtsp://admin:admin@192.168.120.141:554/live/sub",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_131",
+        "name": "Dahua",
+        "ip": "192.168.120.131",
+        "port": 80,
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Dahua",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.131:554/cam/realmonitor?channel=1&subtype=1",
+        "enabled": true
+    }
+]

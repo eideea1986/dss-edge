@@ -1,0 +1,5 @@
+{
+    "hub_url": "http://192.168.120.209:5001",
+    "active_module": "yolo",
+    "enabled": true
+}

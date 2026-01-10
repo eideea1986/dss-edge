@@ -1,0 +1,9 @@
+{
+    "name": "recorder",
+    "version": "1.0.0",
+    "description": "DSS SmartGuard Edge Recorder",
+    "main": "recorder.js",
+    "dependencies": {
+        "fluent-ffmpeg": "^2.1.2"
+    }
+}

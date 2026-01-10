@@ -1,0 +1,14 @@
+[Unit]
+Description=DSS SmartGuard Edge
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node /opt/dss-edge/orchestrator/edgeOrchestrator.js
+Restart=always
+User=root
+Environment=NODE_ENV=production
+Environment=LD_LIBRARY_PATH=/opt/dss-edge/dahua-sdk-temp/libs/lin64
+WorkingDirectory=/opt/dss-edge
+
+[Install]
+WantedBy=multi-user.target

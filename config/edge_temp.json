@@ -1,0 +1,9 @@
+{
+    "locationId":  "LOC_2596",
+    "cameras":  16,
+    "aiPort":  5001,
+    "localApiPort":  8080,
+    "dispatchUrl":  "http://194.107.163.227:8091",
+    "heartbeatInterval":  5000,
+    "name":  "Edge Server New (192.168.120.208)"
+}

@@ -1,0 +1,7 @@
+{
+    "enabled": true,
+    "dispatchHost": "194.107.163.227",
+    "dispatchApiPort": 21001,
+    "dispatchVideoPort": 22001,
+    "status": "Configured via Remote"
+}
