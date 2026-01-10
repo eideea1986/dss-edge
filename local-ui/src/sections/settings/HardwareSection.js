@@ -182,7 +182,7 @@ export function IPDevicesRootSection({ cams, statusData = {}, onEditCam, onSelec
                 {cams.map(c => (
                     <div key={c.id} style={{ background: "#252526", border: "1px solid #444", borderRadius: 4, overflow: "hidden" }}>
                         <div style={{ height: 150, background: "#000", position: "relative" }}>
-                            <Go2RTCPlayer camId={c.id} streamType="sub" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                            <Go2RTCPlayer camId={c.id} streamType="sub" style={{ width: "100%", height: "100%", objectFit: "fill" }} />
                             <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: 10, background: "rgba(0,0,0,0.7)", color: "#fff", fontSize: 14 }}>
                                 {c.name || c.ip}
                             </div>

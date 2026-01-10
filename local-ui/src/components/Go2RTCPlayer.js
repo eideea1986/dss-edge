@@ -15,12 +15,12 @@ export default function Go2RTCPlayer({ camId, streamType = 'hd', style, onClick,
         setUseMjpeg(false);
     }, [streamType]);
 
+    // Unified stream name logic for both WebRTC and MJPEG
+    const suffix = activeStreamType === 'low' ? 'sub' : activeStreamType;
+    const streamName = `${camId}_${suffix}`;
+
     useEffect(() => {
         if (useMjpeg) return;
-
-        // FIX: Match the exact stream name registered by startStream.js
-        // We currently register just the camId without _hd/_sub suffixes
-        const streamName = `${camId}_${activeStreamType}`;
 
         const connectWebRTC = async () => {
             setStatus("connecting");
@@ -76,34 +76,39 @@ export default function Go2RTCPlayer({ camId, streamType = 'hd', style, onClick,
         return () => {
             if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
         };
-    }, [camId, activeStreamType, useMjpeg]);
+    }, [camId, activeStreamType, useMjpeg, streamName]);
 
     return (
-        <div style={{ ...style, position: "relative", background: "#000", overflow: "hidden" }}
+        <div className="rtc-player" style={{ ...style, position: "relative", background: "#000", overflow: "hidden", width: "100%", height: "100%" }}
             onClick={onClick}
             onDoubleClick={onDoubleClick}
         >
-            {useMjpeg ? (
-                <img
-                    src={`/rtc/api/stream.mjpeg?src=${camId}`}
-                    style={{ width: "100%", height: "100%", objectFit: "fill", display: "block" }}
-                    alt="Live Stream"
-                />
-            ) : (
-                <video
-                    ref={videoRef}
-                    style={{ width: "100%", height: "100%", objectFit: "fill", display: "block" }}
-                    playsInline
-                    muted
-                    autoPlay
-                />
-            )}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}>
+                {useMjpeg ? (
+                    <img
+                        className="rtc-player-el"
+                        src={`/rtc/api/stream.mjpeg?src=${streamName}`}
+                        style={{ width: "100%", height: "100%", objectFit: "fill", display: "block" }}
+                        alt="Live Stream"
+                    />
+                ) : (
+                    <video
+                        className="rtc-player-el"
+                        ref={videoRef}
+                        style={{ width: "100%", height: "100%", objectFit: "fill", display: "block" }}
+                        playsInline
+                        muted
+                        autoPlay
+                    />
+                )}
+            </div>
 
             {status !== 'playing' && status !== 'init' && !useMjpeg && (
                 <div style={{
                     position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
                     display: "flex", alignItems: "center", justifyContent: "center",
-                    color: "rgba(255,255,255,0.5)", fontSize: 12, pointerEvents: "none"
+                    color: "rgba(255,255,255,0.5)", fontSize: 12, pointerEvents: "none",
+                    zIndex: 2
                 }}>
                     {status === 'connecting' ? 'Connecting...' : ''}
                 </div>

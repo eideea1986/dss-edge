@@ -72,7 +72,9 @@ export default function Live() {
             case 8: return { cols: "repeat(4, 1fr)", rows: "repeat(2, 1fr)" }; // Trassir 8-view (4x2 usually or 1 big + 7 small) - keeping symetric for now
             case 9: return { cols: "repeat(3, 1fr)", rows: "repeat(3, 1fr)" };
             case 16: return { cols: "repeat(4, 1fr)", rows: "repeat(4, 1fr)" };
+            case 24: return { cols: "repeat(6, 1fr)", rows: "repeat(4, 1fr)" };
             case 25: return { cols: "repeat(5, 1fr)", rows: "repeat(5, 1fr)" };
+            case 32: return { cols: "repeat(8, 1fr)", rows: "repeat(4, 1fr)" };
             default:
                 const cols = Math.ceil(Math.sqrt(gridSize));
                 const rows = Math.ceil(gridSize / cols);
@@ -97,11 +99,11 @@ export default function Live() {
                             LIVE VIEW
                         </div>
                         <div style={{ display: "flex", gap: 1 }}>
-                            {[1, 4, 6, 8, 9, 16].map(num => (
+                            {[1, 4, 6, 8, 9, 12, 16, 24, 32].map(num => (
                                 <button key={num} onClick={() => setGridSize(num)}
                                     style={{
                                         border: "none", background: gridSize === num ? "#007acc" : "#333",
-                                        color: "#fff", width: 24, height: 20, cursor: "pointer", fontSize: 11,
+                                        color: "#fff", width: 26, height: 20, cursor: "pointer", fontSize: 10,
                                         fontWeight: gridSize === num ? "bold" : "normal", marginRight: 1
                                     }}
                                 >
@@ -131,7 +133,8 @@ export default function Live() {
 
                     return (
                         <div key={cam.id} style={{
-                            display: isVisible ? "block" : "none", // Using none to completely remove from grid flow layout
+                            display: isVisible ? "flex" : "none",
+                            flexDirection: "column",
                             position: "relative",
                             width: "100%",
                             height: "100%",
@@ -164,10 +167,11 @@ export default function Live() {
 
             {/* GLOBAL STYLES FOR VIDEO ASPECT RATIO FIX */}
             <style>{`
-                video, canvas {
-                    object-fit: contain !important; 
+                video, img, canvas {
+                    object-fit: fill !important; 
                     width: 100% !important; 
                     height: 100% !important;
+                    display: block !important;
                     background: #000;
                 }
                 /* Go2RTC Player fixes */
