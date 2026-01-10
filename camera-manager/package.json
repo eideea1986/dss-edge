@@ -2,7 +2,7 @@
     "name": "camera-manager",
     "version": "1.0.0",
     "description": "DSS SmartGuard Camera Manager Module",
-    "main": "cameraManager.js",
+    "main": "index.js",
     "scripts": {
         "test": "node tests/test-stream.js",
         "start": "node cameraManager.js"

@@ -14,18 +14,9 @@ const theme = {
     textDim: "#aaa"
 };
 
-export default function CameraWizard({ onFinish, onUpdate }) {
+export default function CameraWizard({ onFinish, onUpdate, onOpenSetup }) {
     const [scannedDevices, setScannedDevices] = useState([]);
     const [scanning, setScanning] = useState(false);
-    const [form, setForm] = useState({
-        ip: "",
-        user: "admin",
-        pass: "",
-        manufacturer: "Auto-Detect"
-    });
-
-    const [status, setStatus] = useState("IDLE");
-    const [statusMsg, setStatusMsg] = useState("");
     const [savedCameras, setSavedCameras] = useState([]);
 
     useEffect(() => { loadSaved(); }, []);
@@ -48,44 +39,24 @@ export default function CameraWizard({ onFinish, onUpdate }) {
     };
 
     const handleSelectDevice = (dev) => {
-        setForm({
-            ...form,
-            ip: dev.ip,
-            manufacturer: dev.manufacturer || "Auto-Detect"
-        });
-        setStatus("IDLE");
+        if (onOpenSetup) {
+            onOpenSetup({
+                ip: dev.ip,
+                user: "admin",
+                pass: "",
+                manufacturer: dev.manufacturer || "Auto-Detect"
+            });
+        }
     };
 
-    const handleConnectAndAdd = async () => {
-        if (!form.ip || !form.user || !form.pass) {
-            alert("Please enter IP, User and Password");
-            return;
-        }
-
-        setStatus("BUSY");
-        setStatusMsg("Connection in progress...");
-
-        try {
-            const res = await API.post("cameras/add", {
-                ip: form.ip,
-                user: form.user,
-                pass: form.pass,
-                manufacturer: form.manufacturer === "Auto-Detect" ? "" : form.manufacturer
+    const handleManualAdd = () => {
+        if (onOpenSetup) {
+            onOpenSetup({
+                ip: "",
+                user: "admin",
+                pass: "",
+                manufacturer: ""
             });
-
-            if (res.data.status === 'ok') {
-                setStatus("SUCCESS");
-                setStatusMsg(`Success! Added via ${res.data.message || 'ONVIF'}`);
-                loadSaved();
-                if (onUpdate) onUpdate();
-                setTimeout(() => {
-                    setStatus("IDLE");
-                    setForm(prev => ({ ...prev, ip: "", pass: "" }));
-                }, 2000);
-            }
-        } catch (e) {
-            setStatus("ERROR");
-            setStatusMsg(e.response?.data?.error || e.message);
         }
     };
 
@@ -135,29 +106,19 @@ export default function CameraWizard({ onFinish, onUpdate }) {
 
             {/* MAIN FORM */}
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#121212" }}>
-                <div style={{ width: "100%", maxWidth: 450, background: theme.panel, padding: 30, borderRadius: 8, border: `1px solid ${theme.border}`, boxShadow: "0 10px 30px rgba(0,0,0,0.5)" }}>
-                    <h2 style={{ margin: "0 0 20px 0", color: "#fff", textAlign: "center" }}>QUICK ADD CAMERA</h2>
+                <div style={{ width: "100%", maxWidth: 500, background: theme.panel, padding: 40, borderRadius: 8, border: `1px solid ${theme.border}`, boxShadow: "0 10px 30px rgba(0,0,0,0.5)", textAlign: "center" }}>
+                    <h2 style={{ margin: "0 0 20px 0", color: "#fff" }}>ADD CAMERA</h2>
+                    <p style={{ color: "#aaa", marginBottom: 30 }}>
+                        Select a discovered device from the list on the left<br />
+                        or manually configure a new connection.
+                    </p>
 
-                    {status !== "IDLE" && (
-                        <div style={{
-                            padding: 15, marginBottom: 20, borderRadius: 4, textAlign: "center", fontWeight: "bold",
-                            background: status === "SUCCESS" ? "rgba(76, 175, 80, 0.2)" : (status === "ERROR" ? "rgba(244, 67, 54, 0.2)" : "rgba(33, 150, 243, 0.2)"),
-                            color: status === "SUCCESS" ? theme.success : (status === "ERROR" ? theme.error : theme.accent),
-                            border: `1px solid ${status === "SUCCESS" ? theme.success : (status === "ERROR" ? theme.error : theme.accent)}`
-                        }}>
-                            {statusMsg}
-                        </div>
-                    )}
+                    <button onClick={handleManualAdd} style={{ padding: "15px 30px", background: theme.accent, color: "#fff", border: "none", borderRadius: 4, fontSize: 16, fontWeight: "bold", cursor: "pointer", width: "100%" }}>
+                        MANUAL ADD (CONNECTION SETUP)
+                    </button>
 
-                    <div style={{ display: "grid", gap: 15 }}>
-                        <div><label style={labelStyle}>IP Address</label><input style={inputStyle} value={form.ip} onChange={e => setForm({ ...form, ip: e.target.value })} /></div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 15 }}>
-                            <div><label style={labelStyle}>Username</label><input style={inputStyle} value={form.user} onChange={e => setForm({ ...form, user: e.target.value })} /></div>
-                            <div><label style={labelStyle}>Password</label><input type="password" style={inputStyle} value={form.pass} onChange={e => setForm({ ...form, pass: e.target.value })} /></div>
-                        </div>
-                        <button onClick={handleConnectAndAdd} disabled={status === "BUSY"} style={{ marginTop: 10, padding: 15, background: status === "BUSY" ? "#555" : theme.accent, color: "#fff", border: "none", borderRadius: 4, fontSize: 16, fontWeight: "bold", cursor: "pointer" }}>
-                            {status === "BUSY" ? "CONNECTING..." : "CONNECT & ADD"}
-                        </button>
+                    <div style={{ marginTop: 20, fontSize: 12, color: "#666" }}>
+                        Opens the Advanced Connection Setup Dialog
                     </div>
                 </div>
 
