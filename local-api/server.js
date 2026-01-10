@@ -57,11 +57,37 @@ app.use(express.json()); // RESTORED
 app.get("/status", (req, res) => {
     const store = require('./store/cameraStore');
     const os = require('os');
+    const { execSync } = require('child_process');
+    const fs = require('fs');
+
+    let diskInfo = { usedPercent: 0, avail: "N/A", used: "N/A", total: "N/A" };
+    try {
+        const targetDir = "/opt/dss-edge";
+        const checkDir = fs.existsSync(targetDir) ? targetDir : __dirname;
+        const dfOutput = execSync(`df -h ${checkDir}`, { timeout: 2000 }).toString();
+        const lines = dfOutput.trim().split("\n");
+        if (lines.length >= 2) {
+            const lastLine = lines[lines.length - 1];
+            const parts = lastLine.trim().split(/\s+/);
+            if (parts.length >= 5) {
+                diskInfo = {
+                    usedPercent: parseInt(parts[4].replace("%", "")),
+                    avail: parts[3],
+                    used: parts[2],
+                    total: parts[1]
+                };
+            }
+        }
+    } catch (e) {
+        console.error("df command failed in /status:", e.message);
+    }
+
     res.json({
         online: true,
         uptime: process.uptime(),
         cpu: os.loadavg(),
         ram: { total: os.totalmem(), free: os.freemem() },
+        disk: diskInfo,
         cameras: store.list().map(c => ({ id: c.id, ip: c.ip, status: c.status })),
         timestamp: new Date().toISOString()
     });
@@ -293,9 +319,9 @@ server.on('upgrade', (req, socket, head) => {
     }
 });
 
-// NOTE: recorderService disabled here because it conflicts with standalone recorder/recorder.js
-// Standalone recorder is preferred for long-term stability and motion tracking.
-console.log("[Server] Standalone Recorder (recorder/recorder.js) is preferred component.");
+// Enable integrated RecorderService (using C++ binary)
+console.log("[Server] Starting Integrated C++ Recorder Service...");
+require('./services/recorderService');
 
 // --- LIFECYCLE INITIALIZATION ---
 try {

@@ -173,10 +173,24 @@ router.get("/", (req, res) => {
     // Use cached disk info if fresh
     if (!diskCache || (Date.now() - lastDiskCheck > DISK_TTL)) {
         try {
-            const dfOutput = execSync(`df -h ${rootDir}`, { timeout: 1000 }).toString();
-            const lines = dfOutput.split("\n");
+            // Target the specific directory we care about
+            const targetDir = "/opt/dss-edge";
+            // Check if directory exists, fallback to current dir
+            const checkDir = fs.existsSync(targetDir) ? targetDir : rootDir;
+
+            const dfOutput = execSync(`df -h ${checkDir}`, { timeout: 2000 }).toString();
+            // Expected output format:
+            // Filesystem      Size  Used Avail Use% Mounted on
+            // /dev/nvme0n1p2  233G   48G  174G  22% /
+
+            const lines = dfOutput.trim().split("\n");
             if (lines.length >= 2) {
-                const parts = lines[1].trim().split(/\s+/);
+                // Get the last line (sometimes df outputs multiple lines for complex mounts)
+                const lastLine = lines[lines.length - 1];
+                const parts = lastLine.trim().split(/\s+/);
+
+                // parts array indices typically:
+                // 0: Filesystem, 1: Size, 2: Used, 3: Avail, 4: Use%, 5: Mounted on
                 if (parts.length >= 5) {
                     diskCache = {
                         usedPercent: parseInt(parts[4].replace("%", "")),
@@ -188,10 +202,14 @@ router.get("/", (req, res) => {
                 }
             }
         } catch (e) {
-            console.error("df command failed", e);
+            console.error("df command failed", e.message);
+            // On failure, keep old cache if available, otherwise return error state
+            if (!diskCache) {
+                diskCache = { usedPercent: 0, avail: "?", used: "?", total: "?" };
+            }
         }
     }
-    status.disk = diskCache || { usedPercent: 0, avail: "N/A", used: "N/A", total: "N/A" };
+    status.disk = diskCache;
 
     statusCache = status;
     lastStatusFetch = Date.now();

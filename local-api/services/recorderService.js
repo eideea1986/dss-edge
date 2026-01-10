@@ -1,106 +1,100 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const cameraStore = require('../store/cameraStore');
 
-const CAM_CONFIG = '/opt/dss-edge/config/cameras.json';
-const REC_DIR = '/opt/dss-edge/recorder/segments';
+// C++ Recorder Binary
+const RECORDER_BIN = '/opt/dss-edge/recorder_cpp/build/recorder';
+const STORAGE_ROOT = '/opt/dss-edge/storage';
 
-let recorders = {};
+class RecorderService {
+    constructor() {
+        this.processes = new Map(); // camId -> ChildProcess
 
-function loadConfig() {
-    try {
-        if (fs.existsSync(CAM_CONFIG)) {
-            const data = fs.readFileSync(CAM_CONFIG, 'utf8');
-            return JSON.parse(data);
-        }
-    } catch (e) {
-        console.error("[Recorder] Config Load Error:", e.message);
-    }
-    return [];
-}
+        // Polling to sync state
+        setInterval(() => this.sync(), 10000);
 
-function startRecorder(cam) {
-    if (recorders[cam.id]) return;
-
-    const url = cam.rtspMain || cam.rtsp;
-    if (!url) {
-        console.warn(`[Recorder] No URL for ${cam.id}`);
-        return;
+        // Initial sync delay to let stores load
+        setTimeout(() => this.sync(), 5000);
     }
 
-    const storeDir = path.join(REC_DIR, cam.id, 'main');
-    try { fs.mkdirSync(storeDir, { recursive: true }); } catch (e) { }
+    sync() {
+        const cameras = cameraStore.list();
 
-    const segmentPattern = path.join(storeDir, '%Y-%m-%dT%H-%M-%S.mp4');
+        cameras.forEach(cam => {
+            // Determine if recording should be active
+            const shouldRecord = (cam.record === true || cam.recordingMode === 'continuous');
 
-    console.log(`[Recorder] Starting Low-CPU Capture for ${cam.id}`);
-
-    // OPTIMIZED FFMPEG COMMAND: COPY ONLY
-    const args = [
-        '-y',
-        '-rtsp_transport', 'tcp',
-        '-i', url,
-        '-c', 'copy',      // CRITICAL: COPY STREAMS, NO TRANSCODING
-        '-map', '0',       // Capture Video + Audio
-        '-f', 'segment',
-        '-segment_time', '300',
-        '-segment_format', 'mp4',
-        '-strftime', '1',
-        '-reset_timestamps', '1',
-        segmentPattern
-    ];
-
-    const proc = spawn('ffmpeg', args);
-    recorders[cam.id] = proc;
-
-    proc.on('close', (code) => {
-        console.log(`[Recorder] ${cam.id} exited (code ${code}).`);
-        delete recorders[cam.id];
-
-        // Restart logic
-        setTimeout(() => {
-            const currentCams = loadConfig();
-            const freshCam = currentCams.find(c => c.id === cam.id);
-            if (freshCam && (freshCam.record === true || freshCam.recordingMode === 'continuous')) {
-                startRecorder(freshCam);
+            if (shouldRecord) {
+                this.startRecorder(cam);
+            } else {
+                this.stopRecorder(cam.id);
             }
-        }, 10000);
-    });
+        });
 
-    proc.on('error', (err) => {
-        console.error(`[Recorder] Spawn Error ${cam.id}:`, err);
-    });
-}
+        // Cleanup removed cameras
+        for (const [id, proc] of this.processes) {
+            if (!cameras.find(c => c.id === id)) {
+                this.stopRecorder(id);
+            }
+        }
+    }
 
-function stopRecorder(id) {
-    if (recorders[id]) {
-        recorders[id].kill('SIGTERM');
+    startRecorder(cam) {
+        if (this.processes.has(cam.id)) return;
+
+        // Ensure storage directory exists
+        const camDir = path.join(STORAGE_ROOT, cam.id);
+        if (!fs.existsSync(camDir)) {
+            try { fs.mkdirSync(camDir, { recursive: true }); } catch (e) { }
+        }
+
+        // Prefer Go2RTC loopback for stability and connection reuse, 
+        // fallback to direct RTSP if needed.
+        // Using 'sub' stream for recording saves disk/cpu unless 'hd' is requested explicitly.
+        // But usually recording is HD.
+        // Let's use direct RTSP for now as the C++ recorder is robust.
+        // Actually, Go2RTC is better for connection limits.
+        const rtspUrl = `rtsp://127.0.0.1:8554/${cam.id}_hd`;
+
+        // Validating binary exists
+        if (!fs.existsSync(RECORDER_BIN)) {
+            console.error(`[Recorder] Binary not found at ${RECORDER_BIN}`);
+            return;
+        }
+
+        console.log(`[Recorder] Starting C++ Recorder for ${cam.id} -> ${camDir}`);
+
+        const args = [rtspUrl, camDir];
+        const proc = spawn(RECORDER_BIN, args); // No special shell needed
+
+        this.processes.set(cam.id, proc);
+
+        proc.stdout.on('data', (d) => {
+            // Optional: Forward C++ logs to Node logs?
+            // console.log(`[Recorder ${cam.id}] ${d.toString().trim()}`);
+        });
+
+        proc.stderr.on('data', (d) => {
+            console.error(`[Recorder ${cam.id} ERR] ${d.toString().trim()}`);
+            // Detect 404/401 and maybe fallback to direct RTSP?
+        });
+
+        proc.on('close', (code) => {
+            console.warn(`[Recorder] ${cam.id} exited with code ${code}`);
+            this.processes.delete(cam.id);
+            // Auto-restart handling is done by next sync() cycle
+        });
+    }
+
+    stopRecorder(id) {
+        if (this.processes.has(id)) {
+            console.log(`[Recorder] Stopping ${id}`);
+            const proc = this.processes.get(id);
+            proc.kill('SIGTERM');
+            this.processes.delete(id);
+        }
     }
 }
 
-function sync() {
-    const cams = loadConfig();
-
-    // Start requested
-    cams.forEach(cam => {
-        if (cam.record === true || cam.recordingMode === 'continuous') {
-            startRecorder(cam);
-        } else {
-            stopRecorder(cam.id);
-        }
-    });
-
-    // Stop orphans
-    Object.keys(recorders).forEach(id => {
-        if (!cams.find(c => c.id === id)) {
-            stopRecorder(id);
-        }
-    });
-}
-
-// Auto-start
-sync();
-// Poll for updates (safe fallback)
-setInterval(sync, 15000);
-
-module.exports = { sync };
+module.exports = new RecorderService();
