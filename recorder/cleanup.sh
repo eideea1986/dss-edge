@@ -1,12 +1,13 @@
 #!/bin/bash
-STORAGE_DIR="/opt/dss-edge/recorder/storage"
+STORAGE_DIR="/opt/dss-edge/storage"
 RETENTION_DAYS=7
 
-# Delete empty directories
-find "$STORAGE_DIR" -mindepth 2 -type d -empty -delete
+# Delete segment files older than retention days
+find "$STORAGE_DIR" -name "*.ts" -mtime +$RETENTION_DAYS -delete
+find "$STORAGE_DIR" -name "*.mp4" -mtime +$RETENTION_DAYS -delete
 
-# Delete segment directories older than retention days
-find "$STORAGE_DIR" -mindepth 2 -maxdepth 2 -type d -mtime +$RETENTION_DAYS -exec rm -rf {} +
+# Delete empty directories
+find "$STORAGE_DIR" -mindepth 1 -type d -empty -delete
 
 # Log cleanup (optional)
-echo "[$(date)] Cleanup ran keeping $RETENTION_DAYS days" >> /opt/dss-edge/recorder/cleanup.log
+echo "[$(date)] Cleanup ran keeping $RETENTION_DAYS days" >> /opt/dss-edge/storage/cleanup.log
