@@ -1,0 +1,10 @@
+{
+  "Dahua": [
+    "/cam/realmonitor?channel=1&subtype=0",
+    "/cam/realmonitor?channel=1&subtype=1"
+  ],
+  "Hikvision": [
+    "/Streaming/Channels/101",
+    "/Streaming/Channels/102"
+  ]
+}

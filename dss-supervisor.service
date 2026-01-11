@@ -1,0 +1,23 @@
+[Unit]
+Description=DSS SmartGuard Supervisor
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+User=root
+ExecStart=/usr/bin/dss-supervisor
+StandardOutput=journal
+StandardError=journal
+
+# Watchdog (systemd will restart if supervisor itself hangs)
+WatchdogSec=60
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=8192
+
+[Install]
+WantedBy=multi-user.target

@@ -14,10 +14,11 @@ process.on('uncaughtException', (err) => {
 const app = express();
 const PORT = 8080;
 
-// --- TELEMETRY WEBSOCKET ---
+// --- TELEMETRY WEBSOCKET (DISABLED) ---
+/*
 const WebSocket = require('ws');
-const wss = new WebSocket.Server({ port: 8081 });
-const playbackClients = new Map(); // camId -> Set of ws clients
+const wss = new WebSocket.Server({ port: 8090 });
+const playbackClients = new Map();
 
 wss.on('connection', (ws) => {
     ws.on('message', (msg) => {
@@ -29,19 +30,15 @@ wss.on('connection', (ws) => {
             }
         } catch (e) { }
     });
-    ws.on('close', () => {
-        // Cleanup
-    });
+    ws.on('close', () => { });
 });
+*/
 
-// Global bridge function to send telemetry
+// Global bridge function (STUB)
 app.sendPlaybackTelemetry = (camId, absTs) => {
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN && client.camId === camId) {
-            client.send(JSON.stringify({ type: 'telemetry', absTs }));
-        }
-    });
+    // Disabled
 };
+
 
 // MANUAL CORS - NUCLEAR OPTION
 app.use((req, res, next) => {
@@ -210,6 +207,13 @@ recorderRouter.telemetryBridge = (camId, absTs) => app.sendPlaybackTelemetry(cam
 app.use("/recorder", recorderRouter);
 app.use("/api/recorder", recorderRouter);
 
+const playbackRoutes = require("./routes/playback");
+app.use("/playback", playbackRoutes);
+app.use("/api/playback", playbackRoutes);
+
+// Serve HLS playback files
+app.use("/playback-hls", express.static("/tmp/playback-hls"));
+
 const streamDelayRoutes = require("./routes/stream_delay");
 app.use("/stream-delay", streamDelayRoutes);
 app.use("/api/stream-delay", streamDelayRoutes);
@@ -281,18 +285,28 @@ app.use("/rtc", (req, res) => {
 });
 
 // --- STATIC UI ---
+// --- STATIC UI ---
 const uiBuildPath = path.join(__dirname, "../local-ui/build");
 if (fs.existsSync(uiBuildPath)) {
-    // Serve static files with specific headers
+
+    // 1. FORCE NO-CACHE for index.html (Vital for updates)
+    app.get(['/', '/index.html'], (req, res) => {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.setHeader('Surrogate-Control', 'no-store');
+        res.sendFile(path.join(uiBuildPath, "index.html"));
+    });
+
+    // 2. Serve other static assets (js, css, images) - these have hashes, so cache is fine
     app.use(express.static(uiBuildPath, {
         setHeaders: (res, path) => {
-            if (path.endsWith(".html")) {
-                // NEVER cache index.html
+            // Double safety: if somehow index.html is requested via static middleware
+            if (path.endsWith("index.html")) {
                 res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
             } else {
-                // Asset files (js/css) are hashed by React, so they can be cached, 
-                // but let's reduce it to 1 minute for this testing phase
-                res.setHeader('Cache-Control', 'public, max-age=60');
+                // Hashed assets
+                res.setHeader('Cache-Control', 'public, max-age=31536000');
             }
         }
     }));
@@ -301,7 +315,7 @@ if (fs.existsSync(uiBuildPath)) {
         const apiPrefixes = ["/cameras", "/events", "/status", "/vpn", "/auth", "/dispatch", "/recorder", "/arming", "/models", "/rtc", "/stream"];
         if (apiPrefixes.some(p => req.path.startsWith(p))) return next();
 
-        // Ensure index.html is NOT cached
+        // SPA Fallback -> index.html (No Cache)
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.sendFile(path.join(uiBuildPath, "index.html"));
     });

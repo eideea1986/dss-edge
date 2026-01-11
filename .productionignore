@@ -1,0 +1,74 @@
+# DSS-Edge - Production Packaging Exclusions
+
+## ❌ NEVER SHIP TO CLIENT (Development/Test Only)
+
+### Deprecated Recorder Components
+recorder/recorder.js
+recorder/recorder_remote.js
+recorder/motionDetector.js
+recorder/playback-engine.js
+
+### Deprecated Playback Components  
+recorder/PlaybackEngine.cpp
+recorder/PlaybackEngineV2.cpp
+recorder/PlaybackEngineV3.cpp
+
+### Development/Debug Scripts
+debug_*.js
+test_*.js
+check_*.js
+deploy_*.js
+*_cleanup.js
+*_debug.js
+*_test.js
+verify_*.js
+read_*.js
+peek_*.js
+logs_*.js
+manual_*.js
+find_*.js
+fix_*.js
+upload_*.js
+update_*.js
+
+### Build Artifacts
+node_modules/
+*.log
+*.pid
+crash.log
+.env
+.env.local
+
+### Temporary Files
+/tmp/
+ramdisk/snapshots/*.jpg
+*.hb
+
+## ✅ PRODUCTION FILES ONLY
+
+### Core Binaries (C++)
+/usr/bin/dss-supervisor
+/usr/bin/recorder
+/usr/bin/playback_server
+
+### Node.js Control Plane
+orchestrator/edgeOrchestrator.js
+local-api/server.js
+local-api/routes/*.js
+local-api/services/recorderService.js
+local-api/playback/playbackController.js
+camera-manager/lifecycle.js
+camera-manager/index.js
+
+### Configuration
+config/
+ecosystem.config.js
+
+### Services
+dss-supervisor.service
+
+### UI
+local-ui/build/
+
+### Storage
+storage/
