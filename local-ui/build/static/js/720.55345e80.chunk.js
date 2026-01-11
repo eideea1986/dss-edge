@@ -1,0 +1,2 @@
+"use strict";(self.webpackChunkdss_edge_ui=self.webpackChunkdss_edge_ui||[]).push([[720],{720(e,s,t){t.r(s),t.d(s,{default:()=>l});t(43);var r=t(216),u=t(579);function l(e){let{children:s}=e;const t=(0,r.zy)();return localStorage.getItem("edge_user")?s:(0,u.jsx)(r.C5,{to:"/login",state:{from:t},replace:!0})}}}]);
+//# sourceMappingURL=720.55345e80.chunk.js.map

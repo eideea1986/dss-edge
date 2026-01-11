@@ -52,10 +52,12 @@ void startDecoder(const std::string& rtsp, const std::string& basePath) {
     int64_t last_keyframe_pts = -1;
     AVStream* in_stream = ifmt_ctx->streams[video_stream_idx];
     
-    // 2 seconds in stream timebase
-    int64_t segment_duration_limit = 2 * in_stream->time_base.den / in_stream->time_base.num;
-    std::cerr << "[Decoder] TimeBase: " << in_stream->time_base.num << "/" << in_stream->time_base.den 
-              << " Limit: " << segment_duration_limit << std::endl;
+    // === SEGMENT ROTATION TRACKING ===
+    // Instead of using PTS diff (unreliable), use wall-clock time
+    auto segment_start_wallclock = std::chrono::steady_clock::now();
+    constexpr int SEGMENT_DURATION_SECONDS = 2;
+    
+    std::cerr << "[Decoder] Segment rotation: Every " << SEGMENT_DURATION_SECONDS << " seconds on keyframe" << std::endl;
 
     auto start_new_segment = [&](AVPacket* p) {
         if (ofmt_ctx) {
@@ -69,8 +71,6 @@ void startDecoder(const std::string& rtsp, const std::string& basePath) {
         std::string path = nextSegmentPath(basePath);
         std::string filename = std::filesystem::path(path).filename().string();
         
-        // Convert stream PTS to simple ms-like storage if preferred, 
-        // but here we store RAW PTS to match file timestamps exact.
         std::cerr << "[Segmenter] New Segment: " << filename << " StartPTS: " << p->pts << std::endl;
         insertSegment(filename, p->pts);
 
@@ -88,21 +88,46 @@ void startDecoder(const std::string& rtsp, const std::string& basePath) {
 
         avformat_write_header(ofmt_ctx, nullptr);
         last_keyframe_pts = p->pts;
+        
+        // Reset wall-clock timer for next segment
+        segment_start_wallclock = std::chrono::steady_clock::now();
     };
 
     int pkt_count = 0;
+    // === HEARTBEAT FOR SUPERVISOR ===
+    std::string heartbeatFile = "/tmp/dss-recorder.hb";
+    int frameCounter = 0;
+    
     while (av_read_frame(ifmt_ctx, &pkt) >= 0) {
         if (pkt.stream_index == video_stream_idx) {
+            frameCounter++;
+            
+            // Update heartbeat every 100 frames (~4 seconds at 25fps)
+            if (frameCounter % 100 == 0) {
+                FILE* hb = fopen(heartbeatFile.c_str(), "w");
+                if (hb) {
+                    fprintf(hb, "%d", frameCounter);
+                    fclose(hb);
+                }
+            }
             bool is_key = pkt.flags & AV_PKT_FLAG_KEY;
             pkt_count++;
             
-            // Debug every keyframe or every 100 packets
+            // Debug every keyframe
             if (is_key) {
                std::cerr << "K(" << pkt.pts << ") ";
             }
 
-            if (is_key && (!ofmt_ctx || (pkt.pts - last_keyframe_pts) >= segment_duration_limit)) {
-                std::cerr << "\n[Decoder] Trigger split. Diff: " << (pkt.pts - last_keyframe_pts) << std::endl;
+            // === SEGMENT ROTATION (ENTERPRISE) ===
+            // Check wall-clock time elapsed since segment start
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - segment_start_wallclock).count();
+            
+            // Rotate segment if:
+            // 1. Keyframe detected (clean cut point)
+            // 2. No segment open OR time elapsed >= SEGMENT_DURATION_SECONDS
+            if (is_key && (!ofmt_ctx || elapsed >= SEGMENT_DURATION_SECONDS)) {
+                std::cerr << "\n[Decoder] Segment rotation triggered. Elapsed: " << elapsed << "s" << std::endl;
                 start_new_segment(&pkt);
             }
 

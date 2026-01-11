@@ -28,7 +28,9 @@ export default function Navbar() {
             </div>
             <div style={{ display: "flex", alignItems: "center" }}>
                 <Link to="/" style={{ marginRight: 20, color: colors.text, textDecoration: "none" }}>Live</Link>
+                <Link to="/playback" style={{ marginRight: 20, color: colors.text, textDecoration: "none" }}>Arhivă</Link>
                 <Link to="/settings" style={{ marginRight: 20, color: colors.text, textDecoration: "none" }}>Setări</Link>
+
 
                 {/* Username Display (Click to Logout) */}
                 <div

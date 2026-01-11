@@ -86,10 +86,11 @@ export default function Live() {
     const capacity = selectedCam ? 1 : gridSize;
 
     return (
-        <div style={{
+        <div className="live-page" style={{
             width: "100%", height: "100%", background: "#0d0d0d", color: colors.text,
             overflow: "hidden", display: "flex", flexDirection: "column"
         }}>
+
             {/* TOOLBAR */}
             {!selectedCam && (
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: "#1a1a1a", borderBottom: "1px solid #333", height: "32px" }}>

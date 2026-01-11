@@ -30,15 +30,15 @@ target_link_libraries(recorder
   Threads::Threads
 )
 
-add_executable(playback_engine
-  PlaybackEngine.cpp
+# Production Playback Server (Enterprise)
+add_executable(playback_server
+  playback_server.cpp
 )
 
-target_link_libraries(playback_engine
-  /usr/lib/x86_64-linux-gnu/libavformat.so
-  /usr/lib/x86_64-linux-gnu/libavcodec.so
-  /usr/lib/x86_64-linux-gnu/libavutil.so
-  /usr/lib/x86_64-linux-gnu/libswscale.so
+target_link_libraries(playback_server
   sqlite3
   Threads::Threads
 )
+
+# Install targets
+install(TARGETS recorder playback_server DESTINATION /usr/bin)

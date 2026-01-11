@@ -1,368 +1,331 @@
-import React, { useEffect, useState, useRef, useMemo } from "react";
-import { useSearchParams } from "react-router-dom";
-import API from "../api";
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import API from '../api';
 
-// --- CSS STYLES (Trassir Enterprise Pro Aesthetic) ---
-const styles = `
-.trassir-player { 
-    height: 100vh; display: flex; flex-direction: column; background: #0a0a0a; color: #eee; font-family: 'Inter', 'Segoe UI', Roboto, sans-serif; 
-}
-.video-container { 
-    flex: 1; background: #000; display: flex; justify-content: center; align-items: center; position: relative; overflow: hidden; min-height: 0;
-}
-.video-el { 
-    max-height: 100%; max-width: 100%; width: auto; height: auto; display: block;
-}
-.status-badge {
-    position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.8); padding: 5px 12px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; border: 1px solid #444; color: #3498db; pointer-events: none; z-index: 100;
-}
-.timeline-container { 
-    background: #151515; border-top: 1px solid #333; display: flex; flex-direction: column; padding: 10px 20px;
-}
-.timeline-axis { 
-    position: relative; height: 50px; background: #222; margin-top: 5px; border-radius: 4px; overflow: hidden; cursor: crosshair; border: 1px solid #333;
-}
-.timeline-seg-video { 
-    position: absolute; height: 100%; background: #2ecc71; opacity: 0.8; border-right: 1px solid #27ae60; min-width: 2px;
-}
-.timeline-event-marker { 
-    position: absolute; width: 3px; height: 100%; background: #e74c3c; z-index: 5;
-}
-.timeline-cursor { 
-    position: absolute; width: 2px; height: 100%; background: #fff; z-index: 10; box-shadow: 0 0 10px #fff; pointer-events: none;
-}
-.controls-bar { 
-    height: 70px; background: #1a1a1a; display: flex; align-items: center; gap: 15px; padding: 0 20px; border-top: 1px solid #222;
-}
-.btn-control { 
-    background: #333; color: #fff; border: 1px solid #444; padding: 8px 12px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 5px; font-size: 0.85rem; white-space: nowrap; transition: all 0.2s;
-}
-.btn-control:hover { background: #444; border-color: #555; }
-.btn-active { background: #3498db !important; border-color: #2980b9 !important; }
-.btn-export { background: #d35400; border-color: #e67e22; }
-.jog-container { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 150px; }
-.jog-slider { width: 100%; cursor: pointer; accent-color: #3498db; }
-.zoom-btn { padding: 4px 8px; font-size: 0.75rem; background: #222; border: 1px solid #444; color: #888; border-radius: 3px; cursor: pointer; }
-.zoom-btn.active { background: #444; color: #fff; }
-`;
+const DAY_MS = 86400000;
+const HOUR_MS = 3600000;
+const MIN_MS = 60000;
 
-const ZOOM_LEVELS = [
-    { label: "24h", range: 86400000 },
-    { label: "6h", range: 21600000 },
-    { label: "1h", range: 3600000 },
-    { label: "10m", range: 600000 }
-];
+const Playback = () => {
+    // 0. URL PARAMS
+    const urlParams = new URLSearchParams(window.location.hash.split('?')[1]);
+    const initCam = urlParams.get('camId');
 
-export default function Playback() {
-    const [params] = useSearchParams();
-    const camId = params.get("camId");
-
-    const [calendar, setCalendar] = useState([]);
+    // STATE
+    const [cameras, setCameras] = useState([]);
+    const [camId, setCamId] = useState(initCam || '');
+    const [timelineSegments, setTimelineSegments] = useState([]);
+    const [serverDayStart, setServerDayStart] = useState(0);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-    const [segments, setSegments] = useState([]);
-    const [events, setEvents] = useState([]);
+    const [stats, setStats] = useState({ first: null, last: null });
 
-    // Playback State
-    const [currentTime, setCurrentTime] = useState(Date.now());
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [speed, setSpeed] = useState(1);
-    const [status, setStatus] = useState("IDLE");
-    const [zoomLevel, setZoomLevel] = useState(ZOOM_LEVELS[0]);
+    // TIMELINE UI STATE
+    const [zoom, setZoom] = useState(1); // 1 = 24h visible
+    const [offsetMs, setOffsetMs] = useState(0); // Offset in ms from dayStart
+    const [playheadMs, setPlayheadMs] = useState(null); // Relative to dayStart
+    const [seekInfo, setSeekInfo] = useState(null); // For displaying "Seeking to: ..."
 
+    // REFS
     const videoRef = useRef(null);
-    const pcRef = useRef(null);
-    const seekTimerRef = useRef(null);
+    const canvasRef = useRef(null);
+    const lastSeekBaseTs = useRef(0); // Store start_ts of the segment we seeked to
 
-    const dayStart = useMemo(() => new Date(selectedDate + "T00:00:00Z").getTime(), [selectedDate]);
-
-    // Derived: Current visible window for timeline
-    const timelineWindow = useMemo(() => {
-        const halfRange = zoomLevel.range / 2;
-        let start = currentTime - halfRange;
-        let end = currentTime + halfRange;
-
-        if (start < dayStart) { start = dayStart; end = dayStart + zoomLevel.range; }
-        if (end > dayStart + 86400000) { end = dayStart + 86400000; start = end - zoomLevel.range; }
-        return { start, end };
-    }, [currentTime, zoomLevel, dayStart]);
-
-    // 1. Fetch Calendar & Initial Segments
+    // 1. LOAD CAMERAS
     useEffect(() => {
-        if (!camId) return;
-        API.get(`/recorder/days`).then(res => {
-            if (res.data && res.data.length) {
-                setCalendar(res.data);
-                if (!res.data.includes(selectedDate)) setSelectedDate(res.data[0]);
-            }
-        }).catch(() => { });
+        API.get('/cameras').then(res => {
+            setCameras(res.data);
+            if (!camId && res.data.length > 0) setCamId(res.data[0].id);
+        }).catch(err => console.error("Cameras load error", err));
     }, [camId]);
 
+    // 1.5. LOAD STATS
     useEffect(() => {
-        if (!camId || !selectedDate) return;
-        API.get(`/recorder/timeline/${camId}/${selectedDate}`)
-            .then(res => {
-                const segs = res.data || [];
-                setSegments(segs);
-                if (segs.length > 0) {
-                    const isNowInRecording = segs.some(s => Date.now() >= s.start && Date.now() <= s.end);
-                    if (!isNowInRecording) handleSeek(segs[0].start);
-                }
-            })
-            .catch(e => console.error(e));
+        if (!camId) return;
+        API.get(`/playback/stats/${camId}?_t=${Date.now()}`)
+            .then(res => setStats(res.data))
+            .catch(console.error);
+    }, [camId]);
 
-        API.get(`/events?cameraId=${camId}&date=${selectedDate}`)
-            .then(res => setEvents(res.data || []))
-            .catch(() => setEvents([]));
+    // 2. LOAD SEGMENTS
+    useEffect(() => {
+        if (!camId) return;
+        API.get(`/playback/timeline-day/${camId}/${selectedDate}?_ts=${Date.now()}`)
+            .then(res => {
+                const { segments, dayStart } = res.data;
+                setServerDayStart(dayStart);
+                setTimelineSegments(segments || []);
+                // Reset timeline on date change
+                setOffsetMs(0);
+                setZoom(1);
+            })
+            .catch(err => console.error("Timeline error", err));
     }, [camId, selectedDate]);
 
-    const [streamUrl, setStreamUrl] = useState(null);
-    const wsRef = useRef(null);
+    // 3. UTILS FOR CANVAS
+    const timeToX = (ms, width) => {
+        const visibleMs = DAY_MS / zoom;
+        return ((ms - offsetMs) / visibleMs) * width;
+    };
 
-    // 2. Direct MJPEG Playback (Solution 1 - No Go2RTC)
-    const startWebRTCSession = async (ts, s = 1) => {
-        setStatus("CONNECTING...");
-        if (wsRef.current) wsRef.current.close();
-        setStreamUrl(null); // Clear previous
+    const xToTime = (x, width) => {
+        const visibleMs = DAY_MS / zoom;
+        return offsetMs + (x / width) * visibleMs;
+    };
 
-        try {
-            // A. Create Session (Force MJPEG format)
-            const res = await API.get(`/recorder/playback/session`, {
-                params: {
-                    camId,
-                    startTs: ts,
-                    speed: s,
-                    windowMs: zoomLevel.range,
-                    format: 'mjpeg'
+    const formatTime = (ms) => {
+        const totalSeconds = Math.floor(ms / 1000);
+        const h = Math.floor(totalSeconds / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        const s = totalSeconds % 60;
+        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    };
+
+    // 4. DRAW TIMELINE
+    const draw = useCallback(() => {
+        const canvas = canvasRef.current;
+        if (!canvas || !serverDayStart) return;
+
+        const ctx = canvas.getContext('2d');
+        const width = canvas.width;
+        const height = canvas.height;
+        const visibleMs = DAY_MS / zoom;
+
+        // Clear
+        ctx.fillStyle = '#111';
+        ctx.fillRect(0, 0, width, height);
+
+        // --- GRID ---
+        let step;
+        if (visibleMs > 12 * HOUR_MS) step = HOUR_MS;
+        else if (visibleMs > 3 * HOUR_MS) step = 30 * MIN_MS;
+        else if (visibleMs > 1 * HOUR_MS) step = 10 * MIN_MS;
+        else step = 1 * MIN_MS;
+
+        ctx.lineWidth = 1;
+        for (let t = Math.floor(offsetMs / step) * step; t < offsetMs + visibleMs; t += step) {
+            const x = timeToX(t, width);
+            if (x < 0 || x > width) continue;
+
+            ctx.strokeStyle = '#333';
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+
+            // Label
+            if (t % HOUR_MS === 0 || visibleMs < 4 * HOUR_MS) {
+                ctx.fillStyle = '#888';
+                ctx.font = '10px Arial';
+                const h = Math.floor(t / HOUR_MS);
+                const m = Math.floor((t % HOUR_MS) / MIN_MS);
+                if (t >= 0 && t <= DAY_MS) {
+                    ctx.fillText(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`, x + 2, 12);
                 }
-            });
-
-            const { sessionId } = res.data;
-
-            // B. Set Stream URL (Direct Backend Access)
-            // Using a timestamp to force refresh the image stream
-            const url = `${API.defaults.baseURL}/recorder/stream/${sessionId}?startTs=${ts}&speed=${s}&format=mjpeg&_t=${Date.now()}`;
-            setStreamUrl(url);
-
-            // C. Connect Telemetry (Sync Timeline)
-            const ws = new WebSocket(`ws://${window.location.hostname}:8081`);
-            wsRef.current = ws;
-            ws.onopen = () => {
-                ws.send(JSON.stringify({ type: 'subscribe', camId }));
-            };
-            ws.onmessage = (e) => {
-                const data = JSON.parse(e.data);
-                if (data.type === 'telemetry') {
-                    setCurrentTime(data.absTs);
-                    setStatus("PLAYING");
-                }
-            };
-
-            setIsPlaying(true);
-        } catch (e) {
-            console.error("Playback Error:", e);
-            setStatus("ERROR");
+            }
         }
-    };
 
-    // 3. (REMOVED) Local estimation timer - We now trust the Server Telemetry
+        // --- SEGMENTS (Green) ---
+        ctx.fillStyle = '#2ecc71';
+        timelineSegments.forEach(s => {
+            const sStart = Number(s.start_ts) - serverDayStart;
+            const sEnd = (s.end_ts === 0 ? Date.now() : Number(s.end_ts)) - serverDayStart;
 
-    // --- GAP SKIP LOGIC ---
-    function findNearestPlayableTs(targetTs) {
-        if (!segments || segments.length === 0) return targetTs;
-        const inSeg = segments.find(s => targetTs >= s.start && targetTs < s.end);
-        if (inSeg) return targetTs;
-        const nextSeg = segments.find(s => s.start > targetTs);
-        if (nextSeg) return nextSeg.start;
-        const last = segments[segments.length - 1];
-        return last ? last.end - 100 : targetTs;
-    }
+            const x1 = timeToX(sStart, width);
+            const x2 = timeToX(sEnd, width);
+            const w = Math.max(x2 - x1, 1);
 
-    // --- ACTIONS ---
-    const handleSeek = (targetAbsTs) => {
-        const safeTs = findNearestPlayableTs(targetAbsTs);
-        setCurrentTime(safeTs);
-        setStatus("SEEKING...");
+            if (x1 + w < 0 || x1 > width) return;
+            ctx.fillRect(x1, 25, w, 25);
+        });
 
-        // Debounce seek to avoid spamming go2rtc
-        if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
-        seekTimerRef.current = setTimeout(() => {
-            startWebRTCSession(safeTs, speed);
-        }, 300);
-    };
+        // --- PLAYHEAD (Red) ---
+        if (playheadMs !== null) {
+            const px = timeToX(playheadMs, width);
+            if (px >= 0 && px <= width) {
+                ctx.strokeStyle = 'red';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(px, 0);
+                ctx.lineTo(px, height);
+                ctx.stroke();
 
-    const togglePlay = () => {
-        if (isPlaying) {
-            if (pcRef.current) pcRef.current.close();
-            pcRef.current = null;
-            setIsPlaying(false);
-            setStatus("PAUSED");
-        } else {
-            startWebRTCSession(currentTime, speed);
+                // Little triangle at top
+                ctx.fillStyle = 'red';
+                ctx.beginPath();
+                ctx.moveTo(px - 5, 0);
+                ctx.lineTo(px + 5, 0);
+                ctx.lineTo(px, 8);
+                ctx.fill();
+            }
         }
+    }, [timelineSegments, serverDayStart, zoom, offsetMs, playheadMs]);
+
+    useEffect(() => {
+        draw();
+    }, [draw]);
+
+    // 5. UPDATE PLAYHEAD FROM VIDEO
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (videoRef.current && !videoRef.current.paused && lastSeekBaseTs.current > 0) {
+                const currentAbsoluteTs = lastSeekBaseTs.current + (videoRef.current.currentTime * 1000);
+                const relativeMs = currentAbsoluteTs - serverDayStart;
+                setPlayheadMs(relativeMs);
+            }
+        }, 500);
+        return () => clearInterval(interval);
+    }, [serverDayStart]);
+
+    // 6. ZOOM HANDLER
+    const handleWheel = (e) => {
+        e.preventDefault();
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseTime = xToTime(mouseX, rect.width);
+
+        const delta = e.deltaY > 0 ? 1.2 : 0.8;
+        let newZoom = Math.min(100, Math.max(1, zoom * (e.deltaY > 0 ? 0.8 : 1.2)));
+
+        const newVisibleMs = DAY_MS / newZoom;
+        let newOffset = mouseTime - (mouseX / rect.width) * newVisibleMs;
+
+        // Clamping
+        newOffset = Math.max(-newVisibleMs * 0.1, Math.min(DAY_MS - newVisibleMs * 0.9, newOffset));
+
+        setZoom(newZoom);
+        setOffsetMs(newOffset);
     };
 
-    const step = (secs) => { handleSeek(currentTime + secs * 1000); };
-    const fineStep = (dir) => { handleSeek(currentTime + (dir * 40)); }; // Approximate one frame at 25fps
+    // 7. CLICK HANDLER
+    const handleCanvasClick = (e) => {
+        if (!serverDayStart) return;
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const clickedRelativeMs = xToTime(x, rect.width);
+        const absoluteTs = Math.floor(serverDayStart + clickedRelativeMs);
 
-    const handleJogChange = (e) => {
-        const val = parseFloat(e.target.value);
-        setSpeed(val);
-        if (val === 0) {
-            if (pcRef.current) pcRef.current.close();
-            setIsPlaying(false);
-            setStatus("PAUSED");
-        } else {
-            startWebRTCSession(currentTime, val);
+        setPlayheadMs(clickedRelativeMs);
+        setSeekInfo(`Seeking to: ${selectedDate} ${formatTime(clickedRelativeMs)}`);
+
+        loadPlayback(absoluteTs);
+    };
+
+    const loadPlayback = (ts) => {
+        if (videoRef.current) {
+            const url = `${API.defaults.baseURL}/playback/stream/${camId}?ts=${ts}&_nocache=${Date.now()}`;
+            console.log(`[Player] Loading: ${url}`);
+
+            // We need to know which segment we started from to track playhead accurately
+            // For now, assume the seek timestamp is the base
+            lastSeekBaseTs.current = ts;
+
+            videoRef.current.src = url;
+            videoRef.current.load();
+            videoRef.current.play().catch(e => console.error("Play error:", e));
         }
-    };
-
-    const handleExport = () => {
-        const start = currentTime - 30000;
-        const end = currentTime + 30000;
-        window.open(`${API.defaults.baseURL}/recorder/export/${camId}?start=${start}&end=${end}`, '_blank');
-    };
-
-    const formatAbsoluteTime = (ms) => {
-        const d = new Date(ms);
-        return d.toLocaleTimeString([], { hour12: false }) + "." + d.getMilliseconds().toString().padStart(3, '0');
     };
 
     return (
-        <div className="trassir-player">
-            <style>{styles}</style>
-
-            {/* Header */}
-            <div style={{ height: 50, background: "#1a1a1a", display: "flex", alignItems: "center", padding: "0 20px", borderBottom: "1px solid #333" }}>
-                <button onClick={() => window.location.href = '/'} className="btn-control" style={{ marginRight: 20 }}>← Back</button>
-                <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
-                    <span style={{ fontSize: "0.95rem", fontWeight: "bold" }}>{camId}</span>
-                    <span style={{ fontSize: "0.75rem", color: "#3498db" }}>TRASSIR Professional Archive</span>
+        <div className="playback-page" style={{ padding: 20, background: '#1a1a1a', color: '#eee', minHeight: '100vh' }}>
+            {/* TOOLBAR */}
+            <div style={{ marginBottom: 15, display: 'flex', gap: 15, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <label style={{ fontSize: 11, color: '#888' }}>Camera</label>
+                    <select
+                        value={camId}
+                        onChange={e => setCamId(e.target.value)}
+                        style={{ padding: '6px 10px', background: '#333', color: '#fff', border: '1px solid #555', borderRadius: 4 }}
+                    >
+                        {cameras.map(c => <option key={c.id} value={c.id}>{c.name || c.ip}</option>)}
+                    </select>
                 </div>
-                <span style={{ margin: "0 15px", color: "#444" }}>|</span>
-                <select value={selectedDate} onChange={e => setSelectedDate(e.target.value)} className="btn-control" style={{ background: "#222", border: "1px solid #444", color: "#eee" }}>
-                    {calendar.map(d => <option key={d} value={d}>{d}</option>)}
-                </select>
-                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center" }}>
-                    <div style={{ fontFamily: "monospace", fontSize: "1.1rem", color: "#3498db", minWidth: 160, textAlign: "right" }}>{formatAbsoluteTime(currentTime)}</div>
-                </div>
-            </div>
 
-            {/* Main Video Area */}
-            <div className="video-container">
-                <div className="status-badge">{status} {Math.abs(speed) !== 1 && isPlaying ? `(${speed}x)` : ''}</div>
-                {streamUrl ? (
-                    <img src={streamUrl} className="video-el" style={{ objectFit: 'fill', width: '100%', height: '100%' }} alt="Stream" />
-                ) : (
-                    <div style={{ width: '100%', height: '100%', background: '#000' }} />
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <label style={{ fontSize: 11, color: '#888' }}>Date</label>
+                    <input
+                        type="date"
+                        value={selectedDate}
+                        onChange={e => setSelectedDate(e.target.value)}
+                        style={{ padding: '5px 10px', background: '#333', color: '#fff', border: '1px solid #555', borderRadius: 4 }}
+                    />
+                </div>
+
+                <button
+                    onClick={() => window.location.reload()}
+                    style={{
+                        marginTop: 15,
+                        padding: '7px 15px',
+                        cursor: 'pointer',
+                        background: '#2ecc71',
+                        color: '#000',
+                        border: 'none',
+                        borderRadius: 4,
+                        fontWeight: 'bold'
+                    }}
+                >
+                    Refresh
+                </button>
+
+                <div style={{ flex: 1 }}></div>
+
+                {seekInfo && (
+                    <div style={{ color: '#f1c40f', fontWeight: 'bold', fontSize: 14, background: 'rgba(0,0,0,0.3)', padding: '5px 15px', borderRadius: 20 }}>
+                        {seekInfo}
+                    </div>
+                )}
+
+                {stats.first && stats.first > 1700000000000 && (
+                    <div style={{ fontSize: 12, color: '#2ecc71', textAlign: 'right' }}>
+                        <div>Archive range:</div>
+                        <div style={{ fontWeight: 'bold' }}>
+                            {new Date(stats.first).toLocaleString()} - {new Date(stats.last).toLocaleString()}
+                        </div>
+                    </div>
                 )}
             </div>
 
-            {/* Timeline Area */}
-            <div className="timeline-container">
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                        <span style={{ fontSize: "0.75rem", color: "#888", textTransform: "uppercase", letterSpacing: 1 }}>Timeline Zoom:</span>
-                        {ZOOM_LEVELS.map(z => (
-                            <button
-                                key={z.label}
-                                className={`zoom-btn ${zoomLevel.label === z.label ? 'active' : ''}`}
-                                onClick={() => setZoomLevel(z)}
-                            >
-                                {z.label}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-
-                <div
-                    className="timeline-axis"
-                    onClick={(e) => {
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const pct = (e.clientX - rect.left) / rect.width;
-                        handleSeek(timelineWindow.start + (pct * zoomLevel.range));
-                    }}
-                >
-                    {/* Recording Segments */}
-                    {segments.filter(s => s.end > timelineWindow.start && s.start < timelineWindow.end).map((seg, idx) => (
-                        <div
-                            key={idx}
-                            className="timeline-seg-video"
-                            style={{
-                                left: `${((Math.max(seg.start, timelineWindow.start) - timelineWindow.start) / zoomLevel.range) * 100}%`,
-                                width: `${((Math.min(seg.end, timelineWindow.end) - Math.max(seg.start, timelineWindow.start)) / zoomLevel.range) * 100}%`,
-                                zIndex: 1
-                            }}
-                        />
-                    ))}
-
-                    {/* Event Markers */}
-                    {events.filter(ev => {
-                        const evTime = new Date(ev.timestamp).getTime();
-                        return evTime >= timelineWindow.start && evTime <= timelineWindow.end;
-                    }).map((ev, idx) => (
-                        <div
-                            key={idx}
-                            className="timeline-event-marker"
-                            style={{ left: `${((new Date(ev.timestamp).getTime() - timelineWindow.start) / zoomLevel.range) * 100}%` }}
-                            title={ev.label || 'Motion'}
-                        />
-                    ))}
-
-                    {/* Cursor */}
-                    <div
-                        className="timeline-cursor"
-                        style={{
-                            left: `${((currentTime - timelineWindow.start) / zoomLevel.range) * 100}%`,
-                            zIndex: 10,
-                            display: (currentTime >= timelineWindow.start && currentTime <= timelineWindow.end) ? 'block' : 'none'
-                        }}
-                    />
-                </div>
-
-                <div style={{ display: "flex", justifyContent: "space-between", color: "#666", fontSize: "0.7rem", marginTop: 5 }}>
-                    <span>{new Date(timelineWindow.start).toLocaleTimeString([], { hour12: false })}</span>
-                    <span>{new Date(timelineWindow.start + zoomLevel.range / 2).toLocaleTimeString([], { hour12: false })}</span>
-                    <span>{new Date(timelineWindow.end).toLocaleTimeString([], { hour12: false })}</span>
-                </div>
+            {/* PLAYER */}
+            <div className="video-container" style={{ background: '#000', borderRadius: 8, overflow: 'hidden', boxShadow: '0 10px 30px rgba(0,0,0,0.5)', width: '100%', height: '65vh', marginBottom: 15 }}>
+                <video
+                    ref={videoRef}
+                    id="player"
+                    controls
+                    autoPlay
+                    style={{ width: '100%', height: '100%' }}
+                    onError={(e) => console.error("Video element error:", e)}
+                />
             </div>
 
-            {/* Controls Bar */}
-            <div className="controls-bar">
-                <button className={`btn-control ${isPlaying ? 'btn-active' : ''}`} onClick={togglePlay} style={{ width: 100, fontWeight: "bold" }}>
-                    {isPlaying ? "⏸ PAUSE" : "▶ PLAY"}
-                </button>
+            {/* TIMELINE */}
+            <div
+                className="timeline-container"
+                style={{
+                    width: '100%',
+                    height: 80,
+                    position: 'relative',
+                    border: '1px solid #333',
+                    borderRadius: 4,
+                    overflow: 'hidden'
+                }}
+            >
+                <canvas
+                    ref={canvasRef}
+                    id="timeline"
+                    width={2000}
+                    height={80}
+                    style={{ width: '100%', height: '100%', cursor: 'crosshair' }}
+                    onClick={handleCanvasClick}
+                    onWheel={handleWheel}
+                />
+            </div>
 
-                <div style={{ display: "flex", gap: 5 }}>
-                    <button className="btn-control" onClick={() => step(-10)} title="Rewind 10s">« 10s</button>
-                    <button className="btn-control" onClick={() => step(-1)} title="Rewind 1s">« 1s</button>
-                    <button className="btn-control" onClick={() => step(1)} title="Forward 1s">1s »</button>
-                    <button className="btn-control" onClick={() => step(10)} title="Forward 10s">10s »</button>
-                </div>
-
-                <div style={{ display: "flex", gap: 5, marginLeft: 15 }}>
-                    <button className="btn-control" title="Fine Step Backward" onClick={() => fineStep(-1)}>|«</button>
-                    <button className="btn-control" title="Fine Step Forward" onClick={() => fineStep(1)}>»|</button>
-                </div>
-
-                {/* Jog Shuttle */}
-                <div className="jog-container" style={{ marginLeft: 30 }}>
-                    <span style={{ fontSize: "0.7rem", color: "#666", fontWeight: "bold" }}>JOG SHUTTLE</span>
-                    <input
-                        type="range" min="-8" max="8" step="0.25"
-                        value={speed}
-                        onChange={handleJogChange}
-                        onMouseUp={() => { if (Math.abs(speed) < 1 && Math.abs(speed) > 0) handleJogChange({ target: { value: 1 } }); }}
-                        className="jog-slider"
-                    />
-                    <div style={{ fontSize: "0.8rem", color: "#3498db" }}>{speed}x</div>
-                </div>
-
-                <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-                    <button className="btn-control btn-export" onClick={handleExport}>
-                        📥 EXPORT CLIP (1m)
-                    </button>
-                </div>
+            <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', color: '#666', fontSize: 11 }}>
+                <div>* Use mouse wheel to ZOOM. Click to SEEK.</div>
+                <div>Zoom: {zoom.toFixed(1)}x</div>
             </div>
         </div>
     );
-}
+};
+
+export default Playback;

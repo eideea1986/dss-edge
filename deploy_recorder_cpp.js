@@ -36,7 +36,10 @@ async function uploadFiles() {
         'IndexDB.cpp',
         'AiDB.cpp',
         'main.cpp',
-        'PlaybackEngine.cpp'
+        'PlaybackEngine.cpp',
+        'PlaybackEngineV2.cpp',
+        'PlaybackEngineV3.cpp',
+        'playback_server.cpp'
     ];
 
     conn.sftp((err, sftp) => {

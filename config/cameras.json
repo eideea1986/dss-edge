@@ -1,0 +1,38 @@
+[
+    {
+        "id": "cam_192_168_120_141",
+        "name": "Trassir 141",
+        "ip": "192.168.120.141",
+        "user": "admin",
+        "pass": "admin",
+        "manufacturer": "Trassir",
+        "rtsp": "rtsp://admin:admin@192.168.120.141:554/live/sub",
+        "rtspMain": "rtsp://admin:admin@192.168.120.141:554/live/main",
+        "rtspSub": "rtsp://admin:admin@192.168.120.141:554/live/sub",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_129",
+        "name": "Hikvision 129",
+        "ip": "192.168.120.129",
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.129:554/Streaming/Channels/102",
+        "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.129:554/Streaming/Channels/101",
+        "rtspSub": "rtsp://admin:a1b2c3d4@192.168.120.129:554/Streaming/Channels/102",
+        "enabled": true
+    },
+    {
+        "id": "cam_192_168_120_144",
+        "name": "Hikvision 144",
+        "ip": "192.168.120.144",
+        "user": "admin",
+        "pass": "a1b2c3d4",
+        "manufacturer": "Hikvision",
+        "rtsp": "rtsp://admin:a1b2c3d4@192.168.120.144:554/Streaming/Channels/102",
+        "rtspMain": "rtsp://admin:a1b2c3d4@192.168.120.144:554/Streaming/Channels/101",
+        "rtspSub": "rtsp://admin:a1b2c3d4@192.168.120.144:554/Streaming/Channels/102",
+        "enabled": true
+    }
+]
