@@ -1,160 +1,140 @@
-const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const sqlite3 = require('sqlite3');
+const { spawn } = require('child_process');
 
 const STORAGE_ROOT = path.resolve(__dirname, "../../storage");
 
-/**
- * PLAYBACK STABIL - IMPLEMENTARE REFERENCE
- * Primeste: camId, ts (epoch ms)
- * Returneaza: Stream Video MP4 Fragmentat (libx264)
- */
-const startPlayback = (req, res) => {
-    const camId = req.params.camId || req.query.camId || req.body.camId;
-    const tsStr = req.query.ts || req.query.start || req.body.ts || req.body.from;
-
-    if (!camId || !tsStr) {
-        return res.status(400).send("Missing camId or ts");
-    }
-
-    const seekTs = Number(tsStr);
-    const dbPath = path.join(STORAGE_ROOT, camId, 'index.db');
-    if (!fs.existsSync(dbPath)) return res.status(404).send("Camera DB not found");
-
-    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
-
-    // 1. Find START segment
-    const sql = `SELECT * FROM segments 
-                 WHERE start_ts <= ? 
-                 AND (end_ts > ? OR end_ts = 0)
-                 ORDER BY start_ts DESC LIMIT 1`;
-
-    db.get(sql, [seekTs, seekTs], (err, startSeg) => {
-        if (err || !startSeg) {
-            // Fallback: Find NEXT available if in a hole
-            const nextSql = `SELECT * FROM segments WHERE start_ts > ? ORDER BY start_ts ASC LIMIT 1`;
-            db.get(nextSql, [seekTs], (err2, nextSeg) => {
-                if (nextSeg) {
-                    fetchSequence(db, camId, nextSeg, 0, res, nextSeg.start_ts);
-                } else {
-                    db.close();
-                    res.status(404).send("No footage found");
-                }
-            });
-            return;
-        }
-
-        // 2. Fetch Sequence (Next segments to ensure continuous play)
-        // We fetch up to 200 segments (approx 10-15 mins if segments are short)
-        fetchSequence(db, camId, startSeg, seekTs, res);
-    });
-};
-
-function fetchSequence(db, camId, startSeg, seekTs, res) {
-    const listSql = `SELECT * FROM segments 
-                     WHERE start_ts >= ? 
-                     ORDER BY start_ts ASC LIMIT 200`;
-
-    db.all(listSql, [startSeg.start_ts], (err, segments) => {
-        db.close();
-        if (err || !segments || segments.length === 0) {
-            return res.status(500).send("Sequence error");
-        }
-
-        // Calculate offset in the FIRST segment
-        const offsetSec = Math.max(0, (seekTs - startSeg.start_ts) / 1000);
-
-        streamSequence(res, camId, segments, offsetSec);
-    });
-}
-
 function resolvePath(camId, segmentFile) {
-    let filePath = segmentFile;
-    if (!path.isAbsolute(filePath)) filePath = path.join(STORAGE_ROOT, camId, segmentFile);
-    if (fs.existsSync(filePath)) return filePath;
-
-    // Try 'segments' subfolder
     const subPath = path.join(STORAGE_ROOT, camId, 'segments', segmentFile);
     if (fs.existsSync(subPath)) return subPath;
-
+    const flatPath = path.join(STORAGE_ROOT, camId, segmentFile);
+    if (fs.existsSync(flatPath)) return flatPath;
     return null;
 }
 
-function streamSequence(res, camId, segments, offsetSec) {
-    // Filter segments that actually exist on disk
-    const validSegments = segments.map(s => resolvePath(camId, s.file)).filter(p => p !== null);
+const streamPartialSegment = (req, res, filePath) => {
+    const offset = Number(req.query.offset || 0);
+    const duration = Number(req.query.duration || 0);
 
-    if (validSegments.length === 0) {
-        return res.status(404).send("No files found on disk");
-    }
+    if (isNaN(offset) || isNaN(duration)) return res.sendStatus(400);
 
-    const tmpDir = '/tmp/playback';
-    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-    const listPath = path.join(tmpDir, `list_${camId}_${Date.now()}.txt`);
-    const concatList = validSegments.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
-    fs.writeFileSync(listPath, concatList);
-
-    console.log(`[Playback] Concat Stream ${camId} | Segments: ${validSegments.length} | Start Offset: ${offsetSec.toFixed(2)}s`);
-
-    // HEADERS
     res.writeHead(200, {
-        'Content-Type': 'video/mp4',
-        'Connection': 'keep-alive',
-        'Cache-Control': 'no-cache, no-store',
+        'Content-Type': 'video/mp2t',
+        'Access-Control-Allow-Origin': '*'
     });
 
-    // FFMPEG with Concat Demuxer
-    const args = [
-        '-hide_banner', '-loglevel', 'error',
-        '-f', 'concat', '-safe', '0',
-        '-ss', offsetSec.toFixed(3),
-        '-i', listPath,
+    const ffmpeg = spawn('ffmpeg', [
+        '-ss', String(offset),       // Seek input
+        '-i', filePath,
+        '-t', String(duration),      // Duration
+        '-c', 'copy',                // Copy codec
+        // CRITICAL: Offset output timestamps to match position in file.
+        // This creates a continuous timeline for HLS player within the file.
+        '-output_ts_offset', String(offset),
+        '-f', 'mpegts',
+        '-'
+    ]);
 
-        // TRANSCODE OBLIGATORIU for browser stability
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-profile:v', 'baseline',
-        '-pix_fmt', 'yuv420p',
-        '-g', '30',
-        '-c:a', 'aac', '-ac', '2', '-ar', '44100',
-
-        // FRAGMENTED MP4
-        '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-        '-f', 'mp4',
-        'pipe:1'
-    ];
-
-    const ffmpeg = spawn('ffmpeg', args);
     ffmpeg.stdout.pipe(res);
+    ffmpeg.stderr.on('data', () => { });
 
-    let bytesSent = 0;
-    ffmpeg.stdout.on('data', c => { bytesSent += c.length; });
-    ffmpeg.stderr.on('data', d => console.error(`[FFMPEG PB ERR] ${d}`));
-
-    ffmpeg.on('exit', (code) => {
-        if (code !== 0 && code !== null) console.error(`[Playback] FFmpeg exited with code ${code}`);
-        try { if (fs.existsSync(listPath)) fs.unlinkSync(listPath); } catch (e) { }
+    req.on('close', () => {
+        ffmpeg.kill();
     });
-
-    res.on('close', () => {
-        const mb = (bytesSent / 1024 / 1024).toFixed(2);
-        console.log(`[Playback] Connection closed for ${camId}. Sent ${mb} MB.`);
-        try {
-            ffmpeg.stdout.unpipe(res);
-            ffmpeg.kill('SIGTERM');
-        } catch (e) { }
-        setTimeout(() => {
-            try { if (fs.existsSync(listPath)) fs.unlinkSync(listPath); } catch (e) { }
-        }, 1000);
-    });
-}
-
-
-
-const stopPlayback = (req, res) => {
-    res.json({ status: "ok" });
 };
 
-module.exports = { startPlayback, stopPlayback, play: startPlayback, stop: stopPlayback };
+const streamSegment = (req, res) => {
+    const { camId, file } = req.params;
+    const filePath = resolvePath(camId, file);
 
+    if (!filePath) {
+        return res.sendStatus(404);
+    }
+
+    if (req.query.offset && req.query.duration) {
+        return streamPartialSegment(req, res, filePath);
+    }
+
+    try {
+        const stat = fs.statSync(filePath);
+        res.writeHead(200, {
+            'Content-Type': 'video/mp2t',
+            'Content-Length': stat.size,
+            'Access-Control-Allow-Origin': '*'
+        });
+        fs.createReadStream(filePath).pipe(res);
+    } catch (e) {
+        console.error(`[Stream] Error:`, e);
+        if (!res.headersSent) res.sendStatus(500);
+    }
+};
+
+const getPlaylist = (req, res) => {
+    const { camId } = req.params;
+    const startTime = Number(req.query.start || 0);
+    const LIMIT_MS = 6 * 60 * 60 * 1000;
+    const endTime = Number(req.query.end || (startTime + LIMIT_MS));
+
+    const dbPath = path.join(STORAGE_ROOT, camId, 'index.db');
+    if (!fs.existsSync(dbPath)) return res.sendStatus(404);
+
+    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
+    const sql = `SELECT * FROM segments WHERE start_ts >= ? AND start_ts < ? ORDER BY start_ts ASC`;
+
+    db.all(sql, [startTime, endTime], (err, rows) => {
+        db.close();
+        if (err || !rows) return res.status(500).send("DB Error");
+        if (rows.length === 0) return res.status(200).send("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-ENDLIST");
+
+        const SEG_DURATION = 2;
+
+        let m3u8 = "#EXTM3U\n";
+        m3u8 += "#EXT-X-VERSION:3\n";
+        m3u8 += `#EXT-X-TARGETDURATION:${SEG_DURATION + 1}\n`;
+        m3u8 += "#EXT-X-PLAYLIST-TYPE:VOD\n";
+        m3u8 += "#EXT-X-MEDIA-SEQUENCE:0\n";
+
+        let validSegmentCount = 0;
+
+        rows.forEach((row) => {
+            if (!resolvePath(camId, row.file)) return;
+
+            // DISCONTINUITY only at physical file boundary (New PTS Origin)
+            if (validSegmentCount > 0) m3u8 += "#EXT-X-DISCONTINUITY\n";
+
+            const fileDuration = (row.end_ts - row.start_ts) / 1000;
+            let currentOffset = 0;
+            let segmentBaseTime = row.start_ts;
+
+            while (currentOffset < fileDuration) {
+                let chunkDur = SEG_DURATION;
+                if (currentOffset + chunkDur > fileDuration) {
+                    chunkDur = fileDuration - currentOffset;
+                }
+
+                if (chunkDur < 0.1) break;
+
+                const date = new Date(segmentBaseTime).toISOString();
+                m3u8 += `#EXT-X-PROGRAM-DATE-TIME:${date}\n`;
+                m3u8 += `#EXTINF:${chunkDur.toFixed(3)},\n`;
+                m3u8 += `/api/playback/stream/${camId}/${row.file}?offset=${currentOffset.toFixed(3)}&duration=${chunkDur.toFixed(3)}\n`;
+
+                currentOffset += chunkDur;
+                segmentBaseTime += (chunkDur * 1000);
+            }
+
+            validSegmentCount++;
+        });
+
+        m3u8 += "#EXT-X-ENDLIST\n";
+
+        res.writeHead(200, {
+            'Content-Type': 'application/vnd.apple.mpegurl',
+            'Access-Control-Allow-Origin': '*'
+        });
+        res.end(m3u8);
+    });
+};
+
+module.exports = { getPlaylist, streamSegment };
