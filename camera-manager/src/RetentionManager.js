@@ -6,8 +6,13 @@ class RetentionManager {
     constructor() {
         // ACTUAL STORAGE PATH used by C++ Recorder
         this.storageRoot = '/opt/dss-edge/storage';
-        this.minFreePercent = 10; // Keep at least 10% free
-        this.targetFreePercent = 15; // Clean up until 15% free
+
+        // TRIGGER CLEANUP: When FREE < 5% (Usage > 95%)
+        this.minFreePercent = 5;
+
+        // STOP CLEANUP: When FREE > 10% (Usage < 90%)
+        this.targetFreePercent = 10;
+
         this.isCleaning = false;
     }
 
@@ -15,14 +20,18 @@ class RetentionManager {
         return new Promise((resolve) => {
             // Check the partition where storageRoot resides
             exec("df -h " + this.storageRoot, (err, stdout) => {
-                if (err) return resolve(null);
-                const lines = stdout.split("\n");
+                if (err) {
+                    console.error("[Retention] DF Error:", err);
+                    return resolve(null);
+                }
+                const lines = stdout.split("\n").filter(l => l.trim().length > 0);
                 if (lines.length < 2) return resolve(null);
-                // Handle possible multi-line output if filesystem name is long
+
+                // Parse last line
                 const lastLine = lines[lines.length - 1];
                 const parts = lastLine.trim().split(/\s+/);
-                // Filesystem Size Used Avail Use% Mounted
-                // The Use% is usually the 5th column (index 4)
+
+                // Find column with %
                 const usedPart = parts.find(p => p.includes('%'));
                 if (!usedPart) return resolve(null);
                 const usedPercent = parseInt(usedPart.replace("%", ""));
@@ -33,9 +42,9 @@ class RetentionManager {
 
     async startCleanupLoop() {
         console.log("[Retention] Starting monitoring loop (Active Storage: " + this.storageRoot + ")");
-        // Run immediately then every 5 mins
+        // Run immediately then every 60 seconds (More frequent checks)
         this.checkAndPurge();
-        setInterval(() => this.checkAndPurge(), 5 * 60 * 1000);
+        setInterval(() => this.checkAndPurge(), 60 * 1000);
     }
 
     async checkAndPurge() {
@@ -44,15 +53,16 @@ class RetentionManager {
             const used = await this.getDiskUsage();
             if (used === null) return;
 
-            console.log(`[Retention] Disk usage: ${used}%`);
+            // Trigger cleanup if usage > 95%
             if (used > (100 - this.minFreePercent)) {
-                console.warn(`[Retention] Disk usage high (${used}%). Starting emergency purge...`);
+                console.warn(`[Retention] CRITICAL DISK USAGE: ${used}%. Trigger > ${100 - this.minFreePercent}%. STARTING PURGE.`);
+
                 this.isCleaning = true;
                 await this.purgeOldestContent();
                 this.isCleaning = false;
 
-                // Re-check after 10 seconds to see if we need more purging
-                setTimeout(() => this.checkAndPurge(), 10000);
+                // If critical, check again very soon to create a rapid purge loop
+                setTimeout(() => this.checkAndPurge(), 2000);
             }
         } catch (e) {
             console.error("[Retention] Loop error:", e);
@@ -61,54 +71,27 @@ class RetentionManager {
     }
 
     async purgeOldestContent() {
-        try {
-            if (!fs.existsSync(this.storageRoot)) return;
+        return new Promise((resolve) => {
+            if (!fs.existsSync(this.storageRoot)) return resolve();
 
-            const camDirs = fs.readdirSync(this.storageRoot);
-            let allSegments = [];
+            console.log("[Retention] Executing Native High-Performance Purge (Top 2000 Oldest Segments)...");
 
-            // 1. Collect ALL segments from ALL cameras
-            for (const camId of camDirs) {
-                const segDir = path.join(this.storageRoot, camId, 'segments');
-                if (fs.existsSync(segDir)) {
-                    const files = fs.readdirSync(segDir).filter(f => f.endsWith('.ts') || f.endsWith('.mp4'));
-                    files.forEach(f => {
-                        const fullPath = path.join(segDir, f);
-                        try {
-                            const stat = fs.statSync(fullPath);
-                            allSegments.push({ path: fullPath, mtime: stat.mtimeMs });
-                        } catch (e) { }
-                    });
+            // NATIVE SHELL OPTIMIZATION
+            // Finds and deletes oldest 2000 .ts files in one go. 
+            // -printf '%T@ %p\n' prints timestamp and path
+            // sort -n sorts by timestamp
+            const cmd = `find ${this.storageRoot} -type f -name "*.ts" -printf '%T@ %p\\n' | sort -n | head -n 2000 | cut -d' ' -f2- | tr '\\n' '\\0' | xargs -0 rm -f`;
+
+            exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
+                if (err) {
+                    console.error("[Retention] Native Purge Error:", stderr);
+                } else {
+                    console.log("[Retention] Batch Purge Complete.");
                 }
-            }
-
-            if (allSegments.length === 0) {
-                console.log("[Retention] No segments found to purge.");
-                return;
-            }
-
-            // 2. Sort by Modification Time (Oldest first)
-            allSegments.sort((a, b) => a.mtime - b.mtime);
-
-            // 3. Delete top 200 oldest segments (approx 30 mins of footage per camera if 10s segments)
-            // This is a "chunked" delete to avoid blocking too long and to allow disk to respirate.
-            const toDelete = allSegments.slice(0, 200);
-            console.log(`[Retention] Deleting ${toDelete.length} oldest segments...`);
-
-            toDelete.forEach(item => {
-                try {
-                    fs.unlinkSync(item.path);
-                } catch (e) {
-                    console.error(`[Retention] Failed to delete ${item.path}`, e);
-                }
+                resolve();
             });
-
-            console.log(`[Retention] Purge complete. Freed ~${toDelete.length * 2}MB`);
-        } catch (e) {
-            console.error("[Retention] Purge Failed:", e);
-        }
+        });
     }
 }
 
 module.exports = new RetentionManager();
-

@@ -1,45 +1,36 @@
-const { Client } = require('ssh2');
+const Client = require('ssh2').Client;
 const fs = require('fs');
-const path = require('path');
 
-const conn = new Client();
+const config = {
+    host: '192.168.120.208',
+    port: 22,
+    username: 'root',
+    password: 'TeamS_2k25!'
+};
 
-const LOCAL_ROOT = path.join(__dirname, 'local-api');
-const REMOTE_ROOT = '/opt/dss-edge/local-api';
-
-const FILES_TO_PATCH = [
-    'playback/playbackController.js',
-    'playback/playbackStats.js',
-    'routes/playback.js'
+const filesToPatch = [
+    { local: 'local-api/playback/playbackController.js', remote: '/opt/dss-edge/local-api/playback/playbackController.js' },
+    { local: 'local-api/routes/playback.js', remote: '/opt/dss-edge/local-api/routes/playback.js' },
+    { local: 'local-api/playback/playbackStats.js', remote: '/opt/dss-edge/local-api/playback/playbackStats.js' },
+    { local: 'camera-manager/src/RetentionManager.js', remote: '/opt/dss-edge/camera-manager/src/RetentionManager.js' }
 ];
 
+const conn = new Client();
 conn.on('ready', () => {
-    console.log('SSH Connected. Patching Backend...');
-
-    let pending = FILES_TO_PATCH.length;
-
+    console.log('SSH Connected. Patching Backend + Retention...');
     conn.sftp((err, sftp) => {
         if (err) throw err;
-
-        FILES_TO_PATCH.forEach(relPath => {
-            const localPath = path.join(LOCAL_ROOT, relPath);
-            const remotePathStr = REMOTE_ROOT + '/' + relPath.replace(/\\/g, '/');
-
-            sftp.fastPut(localPath, remotePathStr, (err) => {
-                if (err) console.error(`Failed to upload ${relPath}:`, err);
-                else console.log(`Up: ${relPath}`);
-
+        let pending = filesToPatch.length;
+        filesToPatch.forEach(file => {
+            sftp.fastPut(file.local, file.remote, (err) => {
+                if (err) console.error(`Error uploading ${file.local}:`, err);
+                else console.log(`Up: ${file.local} -> ${file.remote}`);
                 pending--;
                 if (pending === 0) {
-                    console.log('✅ BACKEND PATCH SUCCESSFUL');
+                    console.log('✅ BACKEND & RETENTION PATCH SUCCESSFUL');
                     conn.end();
                 }
             });
         });
     });
-}).connect({
-    host: '192.168.120.208',
-    port: 22,
-    username: 'root',
-    password: 'TeamS_2k25!'
-});
+}).connect(config);

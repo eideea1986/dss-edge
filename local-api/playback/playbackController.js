@@ -25,13 +25,14 @@ const streamPartialSegment = (req, res, filePath) => {
     });
 
     const ffmpeg = spawn('ffmpeg', [
-        '-ss', String(offset),       // Seek input
+        '-ss', String(offset),       // Seek input (FAST seek to keyframe)
+        '-analyzeduration', '0',     // ULTRA-FAST START: Skip stream analysis
+        '-probesize', '32',          // Minimize probing data
+        '-fflags', '+genpts+discardcorrupt+fastseek', // Optimize seeking behavior
         '-i', filePath,
         '-t', String(duration),      // Duration
-        '-c', 'copy',                // Copy codec
-        // CRITICAL: Offset output timestamps to match position in file.
-        // This creates a continuous timeline for HLS player within the file.
-        '-output_ts_offset', String(offset),
+        '-c', 'copy',                // Copy codec (Instant)
+        '-output_ts_offset', String(offset), // Seamless stitching
         '-f', 'mpegts',
         '-'
     ]);
@@ -100,7 +101,6 @@ const getPlaylist = (req, res) => {
         rows.forEach((row) => {
             if (!resolvePath(camId, row.file)) return;
 
-            // DISCONTINUITY only at physical file boundary (New PTS Origin)
             if (validSegmentCount > 0) m3u8 += "#EXT-X-DISCONTINUITY\n";
 
             const fileDuration = (row.end_ts - row.start_ts) / 1000;
