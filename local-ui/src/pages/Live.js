@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { API } from "../api";
 import CameraCard from "../components/CameraCard";
+import { formatLocalTime } from '../utils/time';
 
 // Styles
 const colors = {
@@ -55,6 +56,25 @@ export default function Live() {
         const i2 = setInterval(checkStatus, 3000);
         return () => { clearInterval(i1); clearInterval(i2); };
     }, []);
+
+    // NEW: Server Time Sync
+    const [currentTime, setCurrentTime] = useState(new Date());
+    const [serverTimezone, setServerTimezone] = useState(null);
+
+    useEffect(() => {
+        API.get('/system/time').then(res => {
+            if (res.data?.raw?.['Time zone']) setServerTimezone(res.data.raw['Time zone'].split(' ')[0]);
+        }).catch(() => { });
+
+        const i = setInterval(() => setCurrentTime(new Date()), 1000);
+        return () => clearInterval(i);
+    }, []);
+
+    const formatTime = (date) => {
+        if (!date) return "";
+        const ts = date instanceof Date ? date.getTime() : date;
+        return formatLocalTime(ts, serverTimezone);
+    };
 
     const handleUpdateCam = async (camId, changes) => {
         const newCams = cams.map(c => c.id === camId ? { ...c, ...changes } : c);
@@ -113,7 +133,7 @@ export default function Live() {
                             ))}
                         </div>
                     </div>
-                    <div style={{ fontSize: 11, color: "#666" }}>{new Date().toLocaleTimeString()}</div>
+                    <div style={{ fontSize: 11, color: "#666" }}>{formatTime(currentTime)}</div>
                 </div>
             )}
 
@@ -141,7 +161,8 @@ export default function Live() {
                             height: "100%",
                             background: "#000",
                             overflow: "hidden",
-                            border: selectedCam ? "none" : "1px solid #222"
+                            border: "none",
+                            padding: 0
                         }}
                             onDoubleClick={() => setSelectedCam(selectedCam ? null : cam)}
                         >
@@ -166,21 +187,25 @@ export default function Live() {
                 ))}
             </div>
 
-            {/* GLOBAL STYLES FOR VIDEO ASPECT RATIO FIX */}
+            {/* GLOBAL STYLES FOR VIDEO CONSTRAINTS */}
             <style>{`
-                video, img, canvas {
-                    object-fit: fill !important; 
-                    width: 100% !important; 
-                    height: 100% !important;
-                    display: block !important;
-                    background: #000;
-                }
-                /* Go2RTC Player fixes */
-                video-stream-mse {
-                    display: block;
+                /* Robust Absolute Positioning for Video */
+                .camera-card-container {
+                    position: relative;
                     width: 100%;
                     height: 100%;
+                    overflow: hidden;
                 }
+                video, img, canvas, video-stream-mse {
+                    position: absolute !important;
+                    top: 0; left: 0;
+                    width: 100% !important; 
+                    height: 100% !important;
+                    object-fit: contain !important;
+                    background: #000;
+                    border: none !important;
+                }
+                
                 /* Scrollbar hide */
                 ::-webkit-scrollbar { width: 6px; height: 6px; }
                 ::-webkit-scrollbar-track { background: #111; }

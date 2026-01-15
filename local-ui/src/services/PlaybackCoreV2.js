@@ -10,37 +10,63 @@ export default class PlaybackCoreV2 {
         this.currentFragStartPTS = 0;
     }
 
-    setSegments(segments) { }
+    setSegments(segments) {
+        // Sort segments chronologically
+        this.segments = [...segments].sort((a, b) => a.startTs - b.startTs);
+
+        // Build Virtual Timeline Map to handle gaps
+        this.timeline = [];
+        let virtualTime = 0;
+
+        for (const s of this.segments) {
+            const duration = s.endTs - s.startTs;
+            this.timeline.push({
+                realStart: s.startTs,
+                realEnd: s.endTs,
+                virtualStart: virtualTime,
+                virtualEnd: virtualTime + duration,
+                duration: duration
+            });
+            virtualTime += duration;
+        }
+
+        this.totalDurationMs = virtualTime;
+        console.log(`[PlaybackCore] Timeline built: ${this.segments.length} segments, Total virtual duration: ${Math.round(virtualTime / 1000)}s`);
+    }
 
     start(startEpochMs) {
-        // console.log(`[HLS] START Request: ${new Date(startEpochMs).toLocaleTimeString()}`);
-
         if (this.hls) {
             this.hls.destroy();
             this.hls = null;
         }
 
-        const startTime = startEpochMs;
-        const endTime = startTime + (12 * 60 * 60 * 1000);
+        // AUTO-SKIP GAPS: If start time is in a gap, jump to next available segment
+        const segment = this.segments?.find(s => startEpochMs >= s.startTs && startEpochMs <= s.endTs);
+        let actualStart = startEpochMs;
 
-        const playlistUrl = `${this.baseUrl}/playback/playlist/${this.camId}.m3u8?start=${startTime}&end=${endTime}`;
+        if (!segment && this.segments) {
+            const next = this.segments.find(s => s.startTs > startEpochMs);
+            if (next) {
+                console.log(`[PlaybackCore] Seeking into gap. Jumping forward to ${new Date(next.startTs).toLocaleTimeString()}`);
+                actualStart = next.startTs;
+            }
+        }
+
+        const playlistUrl = `${this.baseUrl}/playback/playlist/${this.camId}.m3u8?start=${actualStart}&end=${actualStart + 60 * 60 * 1000}`;
 
         if (Hls.isSupported()) {
             this.hls = new Hls({
-                debug: false, // Production Mode
                 enableWorker: true,
-                manifestLoadingTimeOut: 10000,
-                fragLoadingTimeOut: 20000,
-                startFragPrefetch: true,
-                // Tweak buffer for smoother playback of small segments
                 maxBufferLength: 30,
                 maxMaxBufferLength: 60,
+                backBufferLength: 10,
             });
 
             this.hls.loadSource(playlistUrl);
             this.hls.attachMedia(this.video);
 
             this.hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                this.video.currentTime = data.levels[0].details.fragments[0].start;
                 this.video.play().catch(e => console.warn("Autoplay blocked", e));
             });
 
@@ -51,29 +77,34 @@ export default class PlaybackCoreV2 {
                 }
             });
 
-            this.hls.on(Hls.Events.ERROR, (event, data) => {
-                if (data.fatal) {
-                    console.error(`[HLS] FATAL ERROR: ${data.type}`);
-                    switch (data.type) {
-                        case Hls.ErrorTypes.NETWORK_ERROR:
-                            this.hls.startLoad();
-                            break;
-                        case Hls.ErrorTypes.MEDIA_ERROR:
-                            this.hls.recoverMediaError();
-                            break;
-                        default:
-                            this.hls.destroy();
-                            break;
+            // GAP MONITORING
+            this.video.ontimeupdate = () => {
+                const currentEpoch = this.getCurrentEpochMs();
+                if (!currentEpoch) return;
+
+                // If we hit a gap (no segment covers current playback time), find next
+                const inSegment = this.segments?.some(s => currentEpoch >= s.startTs && currentEpoch <= s.endTs);
+                if (!inSegment && this.segments) {
+                    const next = this.segments.find(s => s.startTs > currentEpoch);
+                    if (next) {
+                        console.log("[PlaybackCore] Gap detected during playback. Skipping...");
+                        this.seekTo(next.startTs);
                     }
                 }
-            });
-
+            };
         } else if (this.video.canPlayType('application/vnd.apple.mpegurl')) {
             this.video.src = playlistUrl;
-            this.video.addEventListener('loadedmetadata', () => {
-                this.video.play();
-            });
         }
+    }
+
+    epochToVideoTime(epochMs) {
+        if (!this.timeline) return 0;
+        for (const t of this.timeline) {
+            if (epochMs >= t.realStart && epochMs <= t.realEnd) {
+                return (t.virtualStart + (epochMs - t.realStart)) / 1000;
+            }
+        }
+        return null; // Gap
     }
 
     seekTo(ts) {
@@ -86,12 +117,6 @@ export default class PlaybackCoreV2 {
             const absoluteTime = this.currentFragPDT + (timeInFrag * 1000);
             return absoluteTime;
         }
-        if (this.video.getStartDate && typeof this.video.getStartDate === 'function') {
-            const sd = this.video.getStartDate();
-            if (sd && !isNaN(sd.getTime())) {
-                return sd.getTime() + (this.video.currentTime * 1000);
-            }
-        }
         return 0;
     }
 
@@ -100,10 +125,6 @@ export default class PlaybackCoreV2 {
             this.hls.destroy();
             this.hls = null;
         }
-        if (this.video) {
-            this.video.pause();
-            this.video.removeAttribute('src');
-            this.video.load();
-        }
+        this.video.ontimeupdate = null;
     }
 }

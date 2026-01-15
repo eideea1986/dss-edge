@@ -19,6 +19,14 @@ const services = [
         port: 8080,
         healthUrl: "http://127.0.0.1:8080/status",
         critical: true
+    },
+    {
+        name: "Camera Manager",
+        cmd: "node",
+        args: ["camera-manager/cameraManager.js"],
+        port: 5002,
+        healthUrl: "http://127.0.0.1:5002/status",
+        critical: true
     }
 ];
 
