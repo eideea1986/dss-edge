@@ -44,7 +44,8 @@ import {
 import {
     SystemLogsSection,
     ServiceMaintenanceSection,
-    RebootSection
+    RebootSection,
+    TimeSettingsSection
 } from "../sections/settings/MaintenanceSection";
 
 import CameraEditModal from "../sections/settings/CameraEditModal";
@@ -192,6 +193,9 @@ export default function Settings() {
         } else if (tab === "arming") {
             setExpanded(prev => ({ ...prev, ARMING: true }));
             setSelection({ type: "ARMING_MATRIX" });
+        } else if (tab === "vpn") {
+            setSelection({ type: "NETWORK_VPN" });
+            setExpanded(prev => ({ ...prev, SETTINGS: true, NETWORK: true }));
         }
 
         const interval = setInterval(() => {
@@ -439,11 +443,13 @@ export default function Settings() {
             }
             case "CHANNEL": {
                 const cam = cams.find(c => c.id === selection.id);
+                if (!cam) return <div style={{ padding: 20, color: "#aaa" }}>Se încarcă datele canalului...</div>;
                 return <ChannelSettingsSection cam={cam} cams={cams} setCams={setCams} setSelection={setSelection} availableModules={availableModules} updateCam={updateCam} saveAll={saveAllCams} />;
             }
             case "SYSTEM_LOGS": return <SystemLogsSection />;
             case "MAINTENANCE_SERVICES": return <ServiceMaintenanceSection services={services} onRestartStack={handleRestartStack} />;
             case "MAINTENANCE_REBOOT": return <RebootSection />;
+            case "TIME_SETTINGS": return <TimeSettingsSection />;
             case "WIZARD": return <CameraWizard
                 onUpdate={loadCams}
                 onFinish={() => { loadCams(); setSelection({ type: "IP_DEVICES_ROOT" }); }}
@@ -480,6 +486,7 @@ export default function Settings() {
                     {expanded.SETTINGS && (
                         <div style={{ background: "#1a1a1a", borderBottom: "1px solid #333" }}>
                             {hasAccess("SYSTEM") && <div onClick={() => setSelection({ type: "SYSTEM" })} style={{ padding: "8px 10px 8px 30px", cursor: "pointer", color: "#ccc", fontSize: 13, background: selection.type === "SYSTEM" ? "#094771" : "transparent" }}>Status Sistem</div>}
+                            {hasAccess("SYSTEM") && <div onClick={() => setSelection({ type: "TIME_SETTINGS" })} style={{ padding: "8px 10px 8px 30px", cursor: "pointer", color: "#ccc", fontSize: 13, background: selection.type === "TIME_SETTINGS" ? "#094771" : "transparent" }}>Data si Ora</div>}
                             {hasAccess("SYSTEM") && <div onClick={() => setSelection({ type: "AI_HUB" })} style={{ padding: "8px 10px 8px 30px", cursor: "pointer", color: "#ccc", fontSize: 13, background: selection.type === "AI_HUB" ? "#094771" : "transparent" }}>AI Engine Hub</div>}
 
                             {hasAccess("USERS") && (
@@ -594,8 +601,8 @@ export default function Settings() {
 
                     <div style={{ marginTop: "auto", padding: 20 }}>
                         <div style={{ fontSize: 10, color: "#666", textAlign: "center", marginBottom: 10, fontFamily: "monospace" }}>
-                            UI REVISION: 2026.01.08.1125<br />
-                            (AI SCALE + AUTO-COLLAPSE SIDEBAR)
+                            UI REVISION: 2026.01.15.1800<br />
+                            (NATIVE CHANNEL)
                         </div>
                         <button style={{ ...styles.btnPrimary, background: colors.danger, width: "100%", marginRight: 0 }} onClick={() => { localStorage.removeItem("edge_user"); window.location.reload(); }}>LOGOUT</button>
                     </div>

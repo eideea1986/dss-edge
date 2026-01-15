@@ -3,6 +3,9 @@ const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const httpProxy = require("http-proxy");
+const Redis = require("ioredis");
+
+const redis = new Redis();
 
 // Crash Logger
 process.on('uncaughtException', (err) => {
@@ -39,6 +42,22 @@ app.sendPlaybackTelemetry = (camId, absTs) => {
     // Disabled
 };
 
+// --- PROXY DEFINITIONS ---
+const streamProxy = httpProxy.createProxyServer({ target: "http://127.0.0.1:8554", ws: true });
+const rtcProxy = httpProxy.createProxyServer({ target: "http://127.0.0.1:8085", ws: true });
+
+// Error Handling for Proxies
+streamProxy.on('error', (err, req, res) => {
+    // console.warn("[StreamProxy] Error:", err.message);
+    if (res && !res.headersSent) res.writeHead(502).end();
+});
+
+rtcProxy.on('error', (err, req, res) => {
+    // console.warn("[RTCProxy] Error:", err.message);
+    if (res && !res.headersSent) res.writeHead(502).end();
+});
+
+
 
 // MANUAL CORS - NUCLEAR OPTION
 app.use((req, res, next) => {
@@ -51,42 +70,78 @@ app.use((req, res, next) => {
 
 app.use(express.json()); // RESTORED
 
+// Heartbeat for api itself
+setInterval(() => {
+    redis.set("hb:legacy-api", Date.now());
+}, 2000);
+
+app.get("/api/system/health", async (req, res) => {
+    try {
+        const globalState = await redis.get("global:state") || "UNKNOWN";
+        const liveState = await redis.get("state:live");
+
+        // Collect all heartbeats
+        const services = ["recorder", "live", "indexer", "retention", "legacy-api"];
+        const health = {};
+
+        for (const s of services) {
+            const ts = await redis.get(`hb:${s}`);
+            const drift = ts ? Date.now() - Number(ts) : -1;
+            health[s] = {
+                status: (drift !== -1 && drift < 12000) ? "OK" : "FAIL",
+                lastSeenMs: drift
+            };
+        }
+
+        res.json({
+            system: globalState,
+            modules: health,
+            streams: liveState ? JSON.parse(liveState) : []
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.get("/status", (req, res) => {
+    const { exec } = require('child_process');
     const store = require('./store/cameraStore');
     const os = require('os');
-    const { execSync } = require('child_process');
-    const fs = require('fs');
 
     let diskInfo = { usedPercent: 0, avail: "N/A", used: "N/A", total: "N/A" };
-    try {
-        const targetDir = "/opt/dss-edge";
-        const checkDir = fs.existsSync(targetDir) ? targetDir : __dirname;
-        const dfOutput = execSync(`df -h ${checkDir}`, { timeout: 2000 }).toString();
-        const lines = dfOutput.trim().split("\n");
-        if (lines.length >= 2) {
-            const lastLine = lines[lines.length - 1];
-            const parts = lastLine.trim().split(/\s+/);
-            if (parts.length >= 5) {
-                diskInfo = {
-                    usedPercent: parseInt(parts[4].replace("%", "")),
-                    avail: parts[3],
-                    used: parts[2],
-                    total: parts[1]
-                };
-            }
-        }
-    } catch (e) {
-        console.error("df command failed in /status:", e.message);
-    }
 
-    res.json({
-        online: true,
-        uptime: process.uptime(),
-        cpu: os.loadavg(),
-        ram: { total: os.totalmem(), free: os.freemem() },
-        disk: diskInfo,
-        cameras: store.list().map(c => ({ id: c.id, ip: c.ip, status: c.status })),
-        timestamp: new Date().toISOString()
+    // Async Disk Check to prevent blocking Event Loop
+    const targetDir = "/opt/dss-edge";
+    const checkDir = fs.existsSync(targetDir) ? targetDir : __dirname;
+
+    exec(`df -h ${checkDir}`, { timeout: 1000 }, (err, stdout, stderr) => {
+        if (!err && stdout) {
+            try {
+                const lines = stdout.trim().split("\n");
+                if (lines.length >= 2) {
+                    const lastLine = lines[lines.length - 1];
+                    const parts = lastLine.trim().split(/\s+/);
+                    if (parts.length >= 5) {
+                        diskInfo = {
+                            usedPercent: parseInt(parts[4].replace("%", "")),
+                            avail: parts[3],
+                            used: parts[2],
+                            total: parts[1]
+                        };
+                    }
+                }
+            } catch (e) { }
+        }
+
+        res.json({
+            online: true,
+            uptime: process.uptime(),
+            cpu: os.loadavg(),
+            ram: { total: os.totalmem(), free: os.freemem() },
+            disk: diskInfo,
+            cameras: store.list().map(c => ({ id: c.id, ip: c.ip, status: c.status })),
+            timestamp: new Date().toISOString()
+        });
     });
 });
 
@@ -198,6 +253,10 @@ const discoveryRoutes = require("./routes/discovery");
 app.use("/discovery", discoveryRoutes);
 app.use("/api/discovery", discoveryRoutes);
 
+const systemRoutes = require("./routes/system");
+app.use("/system", systemRoutes);
+app.use("/api/system", systemRoutes);
+
 const dispatchRoutes = require("./routes/dispatch");
 app.use("/dispatch", dispatchRoutes);
 app.use("/api/dispatch", dispatchRoutes);
@@ -241,6 +300,9 @@ app.use("/api/device-config", deviceConfigRoutes);
 const aiRoutes = require("./routes/ai");
 app.use("/ai", aiRoutes);
 app.use("/api/ai", aiRoutes);
+
+const aiIntelligenceRoutes = require("./routes/ai-intelligence");
+app.use("/ai-intelligence/api", aiIntelligenceRoutes);
 
 // Internal Motion Trigger from standalone Recorder
 const aiRouter = require("./services/aiRequest");
@@ -312,7 +374,7 @@ if (fs.existsSync(uiBuildPath)) {
     }));
 
     app.get("*", (req, res, next) => {
-        const apiPrefixes = ["/cameras", "/events", "/status", "/vpn", "/auth", "/dispatch", "/recorder", "/arming", "/models", "/rtc", "/stream"];
+        const apiPrefixes = ["/cameras", "/events", "/status", "/vpn", "/auth", "/dispatch", "/recorder", "/arming", "/models", "/rtc", "/stream", "/playback", "/api"];
         if (apiPrefixes.some(p => req.path.startsWith(p))) return next();
 
         // SPA Fallback -> index.html (No Cache)
@@ -334,11 +396,24 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 // Enable integrated RecorderService (using C++ binary)
-console.log("[Server] Starting Integrated C++ Recorder Service...");
-require('./services/recorderService');
+// Enable integrated Recorder Service (DISABLED FOR ENTERPRISE ORCHESTRATOR)
+// console.log("[Server] Starting Integrated C++ Recorder Service...");
+// require('./services/recorderService');
 
 // --- LIFECYCLE INITIALIZATION ---
 try {
     const cm = require('../camera-manager');
     if (cm.lifecycle) cm.lifecycle.init();
 } catch (e) { console.error("Lifecycle Init Failed:", e); }
+
+// --- PERIODIC DISPATCH HEARTBEAT ---
+const syncManager = require('../orchestrator/syncManager');
+console.log("[Server] Starting periodic Dispatch Heartbeat (30s)...");
+setInterval(async () => {
+    try {
+        await syncManager.performSync();
+    } catch (e) {
+        // console.error("[Heartbeat] Fail:", e.message);
+    }
+}, 30000);
+

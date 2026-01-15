@@ -1,86 +1,141 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from "react";
 
-export default function Go2RTCPlayer({ camId, streamType = 'hd', style, onClick, onDoubleClick, isHidden }) {
-    const videoRef = useRef(null);
-    const pcRef = useRef(null);
-    const [status, setStatus] = useState("init");
-    const [activeStreamType, setActiveStreamType] = useState(streamType);
+/**
+ * GLOBAL STREAM POOL (session-scoped, NU React-scoped)
+ */
+const streamPool = new Map();
 
-    useEffect(() => {
-        setActiveStreamType(streamType);
-    }, [streamType]);
+/**
+ * CONFIG FIX: WebRTC signaling is on the API port (8085)
+ */
+const GO2RTC_API = `http://${window.location.hostname}:1984`;
 
-    const suffix = activeStreamType === 'low' ? 'sub' : activeStreamType;
-    const streamName = `${camId}_${suffix}`;
+async function acquireStream(camId, type = "sub") {
+    const key = `${camId}_${type}`;
 
-    useEffect(() => {
-        if (isHidden) return;
+    if (streamPool.has(key)) {
+        const entry = streamPool.get(key);
+        entry.refs++;
+        console.log(`[Go2RTCPlayer] Reusing stream for ${key}, refs: ${entry.refs}`);
+        return entry;
+    }
 
-        const connectWebRTC = async () => {
-            setStatus("connecting");
-            if (pcRef.current) pcRef.current.close();
+    console.log(`[Go2RTCPlayer] Creating new WebRTC connection for ${key}`);
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    const media = new MediaStream();
 
-            const pc = new RTCPeerConnection({
-                iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-            });
-            pcRef.current = pc;
+    pc.ontrack = (e) => {
+        console.log(`[Go2RTCPlayer] Track received for ${key}`);
+        media.addTrack(e.track);
+    };
 
-            pc.ontrack = (event) => {
-                if (videoRef.current) {
-                    videoRef.current.srcObject = event.streams[0];
-                    videoRef.current.play().catch(() => { });
-                    setStatus("playing");
-                }
-            };
+    pc.addTransceiver("video", { direction: "recvonly" });
 
-            pc.addTransceiver('video', { direction: 'recvonly' });
+    try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
 
-            try {
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-
-                const apiUrl = `/rtc/api/webrtc?src=${streamName}`;
-                const res = await fetch(apiUrl, { method: 'POST', body: pc.localDescription.sdp });
-
-                if (!res.ok) throw new Error(`Status ${res.status}`);
-
-                const answerSdp = await res.text();
-                if (pcRef.current && pcRef.current.signalingState !== 'closed') {
-                    await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answerSdp }));
-                }
-            } catch (e) {
-                console.warn(`[WebRTC] Failed ${streamName}:`, e.message);
-                if (activeStreamType === 'low' || activeStreamType === 'sub') {
-                    setActiveStreamType('hd');
-                } else {
-                    setStatus("failed");
-                }
+        const res = await fetch(
+            `${GO2RTC_API}/api/webrtc?src=${key}`,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/sdp" },
+                body: offer.sdp
             }
+        );
+
+        if (!res.ok) {
+            throw new Error(`WebRTC signaling failed: ${res.status}`);
+        }
+
+        const answer = await res.text();
+        await pc.setRemoteDescription({ type: "answer", sdp: answer });
+
+        const entry = {
+            pc,
+            media,
+            refs: 1
         };
 
-        if (camId) connectWebRTC();
+        streamPool.set(key, entry);
+        return entry;
+    } catch (err) {
+        pc.close();
+        throw err;
+    }
+}
+
+function releaseStream(camId, type = "sub") {
+    const key = `${camId}_${type}`;
+    const entry = streamPool.get(key);
+    if (!entry) return;
+
+    entry.refs--;
+    console.log(`[Go2RTCPlayer] Released stream for ${key}, refs: ${entry.refs}`);
+
+    // 15s grace period to prevent flickering during tab switches
+    if (entry.refs <= 0) {
+        setTimeout(() => {
+            const currentEntry = streamPool.get(key);
+            if (currentEntry && currentEntry.refs <= 0) {
+                console.log(`[Go2RTCPlayer] Closing idle connection for ${key}`);
+                currentEntry.pc.close();
+                streamPool.delete(key);
+            }
+        }, 15000);
+    }
+}
+
+/**
+ * UI COMPONENT – DOAR ATAȘARE
+ */
+export default function Go2RTCPlayer({ camId, streamType = "sub", style, isHidden }) {
+    const videoRef = useRef(null);
+    const type = streamType === 'low' || streamType === 'sub' ? 'sub' : 'hd';
+
+    useEffect(() => {
+        if (isHidden || !camId) return;
+
+        let active = true;
+        let streamEntry;
+
+        acquireStream(camId, type)
+            .then((entry) => {
+                if (!active) {
+                    releaseStream(camId, type);
+                    return;
+                }
+                streamEntry = entry;
+                if (videoRef.current) {
+                    videoRef.current.srcObject = entry.media;
+                    videoRef.current.play().catch(() => { });
+                }
+            })
+            .catch((err) => {
+                console.error(`[Go2RTCPlayer] Error for ${camId}_${type}:`, err);
+            });
 
         return () => {
-            if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
+            active = false;
+            if (streamEntry) {
+                releaseStream(camId, type);
+            }
         };
-    }, [camId, activeStreamType, streamName, isHidden]);
+    }, [camId, type, isHidden]);
 
     return (
-        <div className="rtc-player" style={{ ...style, position: "relative", background: "#000", width: "100%", height: "100%", overflow: "hidden" }}
-            onClick={onClick} onDoubleClick={onDoubleClick}>
-            <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}>
-                <video
-                    className="rtc-player-el"
-                    ref={videoRef}
-                    style={{ width: "100%", height: "100%", objectFit: "fill", display: "block" }}
-                    playsInline muted autoPlay
-                />
-            </div>
-            {status === 'connecting' && (
-                <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.4)", fontSize: 10, zIndex: 2 }}>
-                    Connecting...
-                </div>
-            )}
+        <div style={{ ...style, position: "relative", background: "#000", width: "100%", height: "100%" }}>
+            <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
+                style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "fill"
+                }}
+            />
         </div>
     );
 }

@@ -20,27 +20,27 @@ function getDeviceIp() {
     // Fallback to OS interfaces
     const interfaces = os.networkInterfaces();
     let bestIp = "127.0.0.1";
-    let foundVpn = false;
 
-    // Priority: 'tailscale0' > IP starts with 100. > any non-internal
+    // 1. Priority: WireGuard (wg0, wg1, etc.)
     for (const name of Object.keys(interfaces)) {
-        // EXPLICITLY SKIP TAILSCALE INTERFACES
+        if (name.startsWith("wg")) {
+            for (const iface of interfaces[name]) {
+                if (iface.family === 'IPv4' && !iface.internal) {
+                    return iface.address; // Return immediately if VPN found
+                }
+            }
+        }
+    }
+
+    // 2. Fallback: Any non-internal IPv4 (skip Carrier NAT 100.x)
+    for (const name of Object.keys(interfaces)) {
         if (name.toLowerCase().includes("tailscale")) continue;
 
         for (const iface of interfaces[name]) {
-            // VPN Checks DISABLED for Tunnel Move
-            // if (name.toLowerCase().includes("tailscale")) return iface.address; // Highest priority
-            // if (iface.address.startsWith("100.")) {
-            //    bestIp = iface.address; // Good candidate
-            //    foundVpn = true;
-            // } else if (!foundVpn) {
             if (iface.family === 'IPv4' && !iface.internal) {
-                // EXPLICITLY SKIP 100.x.x.x (Carrier Grade NAT / Tailscale default)
                 if (iface.address.startsWith("100.")) continue;
-
-                bestIp = iface.address; // Only overwrite if no VPN found yet
+                bestIp = iface.address;
             }
-            // }
         }
     }
     return bestIp;
@@ -126,11 +126,20 @@ async function performSync(axiosInstance) {
 
                 // 5. Send Heartbeat
                 try {
+                    let recorderHealth = {};
+                    try {
+                        recorderHealth = require('../local-api/services/recorderService').getHealth();
+                    } catch (e) { }
+
                     await axios.post(`${baseUrl}/status/heartbeat`, {
                         locationId: payload.locationId,
                         name: payload.name,
                         vpnIp: payload.ip,
-                        health: { status: "online", uptime: process.uptime() }
+                        health: {
+                            status: "online",
+                            uptime: process.uptime(),
+                            recorder: recorderHealth
+                        }
                     }, { timeout: 3000 });
                 } catch (hbErr) {
                     // ignore heartbeat error

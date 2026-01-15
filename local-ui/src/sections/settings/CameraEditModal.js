@@ -47,6 +47,36 @@ export default function CameraEditModal({
                         </select>
                     </div>
 
+                    {/* AI Configuration Section */}
+                    <div style={{ marginBottom: 20, padding: 10, background: "rgba(0,0,0,0.2)", borderRadius: 4, border: "1px dashed #444" }}>
+                        <label style={{ ...styles.label, color: "#4caf50" }}>AI Sensitivity (Threshold)</label>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <input
+                                type="number"
+                                step="0.05"
+                                min="0.1"
+                                max="1.0"
+                                style={{ ...styles.input, width: 80, textAlign: "center" }}
+                                value={editCam.ai_server?.threshold !== undefined ? editCam.ai_server.threshold : 0.3}
+                                onChange={e => {
+                                    const val = parseFloat(e.target.value);
+                                    setEditCam(prev => ({
+                                        ...prev,
+                                        ai_server: {
+                                            ...(prev.ai_server || {}),
+                                            threshold: val
+                                        }
+                                    }));
+                                }}
+                            />
+                            <div style={{ fontSize: 11, color: "#aaa" }}>
+                                0.3 = Default (Standard)<br />
+                                0.15 = Max Sensitivity (Distant)<br />
+                                0.6 = Strict (Clear Only)
+                            </div>
+                        </div>
+                    </div>
+
                     <div style={{ border: "1px solid #444", padding: 15, borderRadius: 4, background: "#1e1e1e" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
                             <span style={{ fontWeight: "bold", fontSize: 13, color: "#ddd" }}>Auto-Discovery & Probing</span>
