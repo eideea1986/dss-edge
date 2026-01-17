@@ -1,56 +1,174 @@
 const path = require("path");
 const fs = require("fs");
-const sqlite3 = require('sqlite3');
 
 const STORAGE_ROOT = path.resolve(__dirname, "../../storage");
 
 const getStats = (req, res) => {
-    const { camId } = req.params;
-    const dbPath = path.join(STORAGE_ROOT, camId, 'index.db');
-
-    if (!fs.existsSync(dbPath)) return res.json({ first: null, last: null });
-
-    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
-    db.get("SELECT MIN(start_ts) as first, MAX(end_ts) as last FROM segments", (err, row) => {
-        db.close();
-        if (err) {
-            console.error("Stats DB Error:", err);
-            return res.status(500).send("DB Error");
-        }
-        res.json(row || { first: null, last: null });
-    });
+    return res.json({ first: null, last: null });
 };
 
 const getTimelineDay = (req, res) => {
     const { camId, date } = req.params;
-    const dbPath = path.join(STORAGE_ROOT, camId, 'index.db');
+    // console.log(`[Timeline] Request for ${camId} on ${date}`);
 
-    if (!fs.existsSync(dbPath)) return res.json({ segments: [], dayStart: 0 });
+    try {
+        const [y, m, d] = date.split('-');
+        const dayDir = path.join(STORAGE_ROOT, camId, y, m, d);
 
-    // Parse date (YYYY-MM-DD)
-    const parts = date.split('-');
-    const year = parseInt(parts[0]);
-    const month = parseInt(parts[1]) - 1;
-    const day = parseInt(parts[2]);
+        const dayStartTs = new Date(parseInt(y), parseInt(m) - 1, parseInt(d)).getTime();
+        let segments = [];
 
-    const targetDate = new Date(year, month, day);
-    const dayStart = targetDate.setHours(0, 0, 0, 0);
-    const dayEnd = targetDate.setHours(23, 59, 59, 999);
+        if (fs.existsSync(dayDir)) {
 
-    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
-    const sql = `SELECT start_ts, end_ts, file FROM segments WHERE start_ts >= ? AND start_ts <= ? ORDER BY start_ts ASC`;
+            // Helper to process files
+            const processFile = (f, fullPath, hourContext = null) => {
+                try {
+                    const name = f.replace('.mp4', '');
+                    let h, min, s;
 
-    db.all(sql, [dayStart, dayEnd], (err, rows) => {
-        db.close();
-        if (err) {
-            console.error("Timeline DB Error:", err);
-            return res.status(500).send("DB Error");
+                    if (hourContext !== null) {
+                        // Pattern B: MM-SS (Hierarchical, inside HH folder)
+                        const parts = name.split('-');
+                        if (parts.length >= 2) {
+                            h = hourContext;
+                            min = parseInt(parts[0]);
+                            s = parseInt(parts[1]);
+                        } else return;
+                    } else {
+                        // Pattern A: HH-MM-SS (Flat, in day root)
+                        const parts = name.split('-');
+                        if (parts.length >= 3) {
+                            h = parseInt(parts[0]);
+                            min = parseInt(parts[1]);
+                            s = parseInt(parts[2]);
+                        } else return;
+                    }
+
+                    if (isNaN(h) || isNaN(min) || isNaN(s)) return;
+
+                    const startOffset = (h * 3600 + min * 60 + s) * 1000;
+                    const startTs = dayStartTs + startOffset;
+
+                    const stat = fs.statSync(fullPath);
+                    // Approx duration: size / 1Mbps (125000 bytes/sec)
+                    const durationSec = Math.max(1, stat.size / 125000);
+                    const endTs = startTs + (durationSec * 1000);
+
+                    segments.push({
+                        start_ts: startTs,
+                        end_ts: endTs,
+                        file: path.relative(path.join(STORAGE_ROOT, camId), fullPath).replace(/\\/g, '/')
+                    });
+                } catch (e) { }
+            };
+
+            // 1. Scan Root Day Files (Flat structure)
+            try {
+                const rootFiles = fs.readdirSync(dayDir).filter(f => f.endsWith('.mp4'));
+                rootFiles.forEach(f => processFile(f, path.join(dayDir, f), null));
+            } catch (e) { }
+
+            // 2. Scan Subdirectories (Hourly structure)
+            try {
+                const subDirs = fs.readdirSync(dayDir).filter(d => {
+                    // Check if directory and numeric
+                    try { return !d.includes('.') && !isNaN(parseInt(d)) && fs.statSync(path.join(dayDir, d)).isDirectory(); } catch (e) { return false; }
+                });
+
+                subDirs.forEach(hDir => {
+                    const h = parseInt(hDir);
+                    const hPath = path.join(dayDir, hDir);
+                    const files = fs.readdirSync(hPath).filter(f => f.endsWith('.mp4'));
+                    files.forEach(f => processFile(f, path.join(hPath, f), h));
+                });
+            } catch (e) { }
         }
-        res.json({
-            dayStart,
-            segments: rows || []
+
+        segments.sort((a, b) => a.start_ts - b.start_ts);
+
+        return res.json({
+            dayStart: dayStartTs,
+            segments
         });
-    });
+
+    } catch (e) {
+        console.error("Timeline FS Error", e);
+        return res.status(500).json({ dayStart: 0, segments: [] });
+    }
 };
 
-module.exports = { getStats, getTimelineDay };
+// --- FAST RANGE LOOKUP (No Full Scan) ---
+const getGlobalRange = (camId) => {
+    const camDir = path.join(STORAGE_ROOT, camId);
+    if (!fs.existsSync(camDir)) return { start: null, end: null };
+
+    const getEdgePath = (dir, mode) => {
+        try {
+            if (!fs.existsSync(dir)) return null;
+            const items = fs.readdirSync(dir).filter(x => !x.startsWith('.'));
+            if (items.length === 0) return null;
+
+            // Sort numeric
+            items.sort((a, b) => {
+                return mode === 'min' ? a.localeCompare(b, undefined, { numeric: true }) : b.localeCompare(a, undefined, { numeric: true });
+            });
+
+            const top = items[0];
+            const nextPath = path.join(dir, top);
+            const stat = fs.statSync(nextPath);
+
+            if (stat.isDirectory()) {
+                return getEdgePath(nextPath, mode);
+            } else if (top.endsWith('.mp4')) {
+                return nextPath;
+            }
+            return null;
+        } catch (e) { return null; }
+    };
+
+    const minFile = getEdgePath(camDir, 'min');
+    const maxFile = getEdgePath(camDir, 'max');
+
+    const extractTs = (fullPath) => {
+        if (!fullPath) return null;
+        try {
+            const rel = path.relative(path.join(STORAGE_ROOT, camId), fullPath).replace(/\\/g, '/');
+            const parts = rel.split('/');
+            // Expect: YYYY/MM/DD/[HH/MM-SS | HH-MM-SS]
+            if (parts.length >= 3) {
+                const y = parseInt(parts[0]);
+                const m = parseInt(parts[1]) - 1;
+                const d = parseInt(parts[2]);
+
+                let h = 0, min = 0, s = 0;
+                const last = parts[parts.length - 1];
+                const sub = parts[parts.length - 2];
+
+                if (!isNaN(parseInt(sub)) && parts.length === 5) {
+                    // Pattern HH/MM-SS.mp4
+                    h = parseInt(sub);
+                    const p = last.replace('.mp4', '').split('-');
+                    min = parseInt(p[0]);
+                    s = parseInt(p[1]);
+                } else {
+                    // Pattern HH-MM-SS.mp4
+                    const p = last.replace('.mp4', '').split('-');
+                    if (p.length === 3) {
+                        h = parseInt(p[0]);
+                        min = parseInt(p[1]);
+                        s = parseInt(p[2]);
+                    }
+                }
+                return new Date(y, m, d, h, min, s).getTime();
+            }
+        } catch (e) { }
+        return fs.statSync(fullPath).mtimeMs;
+    };
+
+    return {
+        start: extractTs(minFile),
+        end: extractTs(maxFile)
+    };
+};
+
+module.exports = { getStats, getTimelineDay, getGlobalRange };

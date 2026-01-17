@@ -140,7 +140,7 @@ export function CanvasROI({ points = [], onChange, readOnly = false, otherZones 
                 ref={canvasRef}
                 width={dims.w} // Lock resolution to physical pixels
                 height={dims.h}
-                style={{ width: "100%", height: "100%", display: "block", cursor: readOnly ? "default" : "crosshair" }}
+                style={{ width: "100%", height: "100%", display: "block", cursor: readOnly ? "default" : "crosshair", background: "transparent" }}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
@@ -154,6 +154,8 @@ const styles = {
     inputTable: { background: "#444", border: "1px solid #555", color: "#fff", width: "100%", padding: 2 },
     btnPrimary: { marginRight: 10, padding: "6px 20px", background: "#007acc", color: "white", border: "none", borderRadius: 2, fontSize: 13, cursor: "pointer", fontWeight: "bold" },
     btnToolbar: { marginRight: 10, padding: "6px 15px", background: "#333", color: "#ddd", border: "1px solid #444", borderRadius: 2, fontSize: 12, cursor: "pointer" },
+    settingRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid #2a2a2a" },
+    inputNum: { background: "#222", border: "1px solid #444", color: "#fff", padding: 4, borderRadius: 4, width: 60, textAlign: "center" }
 };
 
 export function IPDevicesRootSection({ cams, statusData = {}, onEditCam, onSelectCam, onDeleteCam }) {
@@ -385,9 +387,121 @@ export function CameraSettingsSection({
     );
 }
 
+function AdvancedAITab({ camId }) {
+    const [config, setConfig] = useState(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        if (!camId) return;
+        setLoading(true);
+        API.get(`/ai-intelligence/api/config/${camId}`)
+            .then(res => {
+                const data = res.data?.config || res.data || {};
+                setConfig(data);
+                setLoading(false);
+            })
+            .catch(e => {
+                console.error("AI Config Error:", e);
+                setConfig({
+                    false_detection_filter: { enabled: false, threshold: 0.3, stability_frames: 3, motion_only: false, detection_count_before_ignore: 5, min_displacement_pixels: 50 },
+                    event_manager: { cooldown_seconds: 30 }
+                });
+                setLoading(false);
+            });
+    }, [camId]);
+
+    const updateFilter = (key, val) => {
+        if (!config) return;
+        setConfig(prev => ({
+            ...prev,
+            false_detection_filter: { ...(prev?.false_detection_filter || {}), [key]: val }
+        }));
+    };
+
+    const updateEvent = (key, val) => {
+        if (!config) return;
+        setConfig(prev => ({
+            ...prev,
+            event_manager: { ...(prev?.event_manager || {}), [key]: val }
+        }));
+    };
+
+    const handleSave = async () => {
+        try {
+            await API.post(`/ai-intelligence/api/config/${camId}`, config);
+            alert("Setări salvate!");
+        } catch (e) {
+            alert("Eroare: " + e.message);
+        }
+    };
+
+    if (loading || !config) return <div style={{ padding: 20, color: "#ccc" }}>Se încarcă...</div>;
+
+    const filter = config.false_detection_filter || {};
+    const events = config.event_manager || {};
+
+    return (
+        <div style={{ padding: 20, maxWidth: 1000 }}>
+            <div style={{ background: "#252526", padding: 20, borderRadius: 8, border: "1px solid #444", marginBottom: 20 }}>
+                <h4 style={{ margin: "0 0 15px 0", color: "#4caf50" }}>Filtre Detectare False</h4>
+
+                <div style={{ display: "flex", alignItems: "center", marginBottom: 15 }}>
+                    <input type="checkbox" checked={filter.enabled || false} onChange={e => updateFilter("enabled", e.target.checked)} style={{ width: 18, height: 18 }} />
+                    <label style={{ marginLeft: 10, fontWeight: "bold", color: "#fff" }}>Activează Filtrele</label>
+                </div>
+
+                <div style={styles.settingRow}>
+                    <label style={{ color: "#ccc" }}>Detectează doar în timpul mișcării</label>
+                    <input type="checkbox" checked={filter.motion_only || false} onChange={e => updateFilter("motion_only", e.target.checked)} />
+                </div>
+
+                <div style={styles.settingRow}>
+                    <label style={{ color: "#ccc" }}>Ignoră detectări repetate (Anti-Vânt/Ploaie)</label>
+                    <input type="number" value={filter.detection_count_before_ignore || 5} onChange={e => updateFilter("detection_count_before_ignore", parseInt(e.target.value))} style={styles.inputNum} />
+                </div>
+
+                <div style={styles.settingRow}>
+                    <label style={{ color: "#ccc" }}>Frame-uri de stabilitate (Confirmare)</label>
+                    <input type="number" value={filter.stability_frames || 3} onChange={e => updateFilter("stability_frames", parseInt(e.target.value))} style={styles.inputNum} />
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, paddingTop: 10, borderTop: "1px dashed #444" }}>
+                    <label style={{ color: "#4caf50" }}>Sensibilitate AI (Threshold)</label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <input type="number" step="0.05" min="0.1" max="1.0"
+                            value={filter.threshold ?? 0.3}
+                            onChange={e => updateFilter("threshold", parseFloat(e.target.value))}
+                            style={{ background: "#222", border: "1px solid #4caf50", color: "#fff", padding: 4, borderRadius: 4, width: 60, textAlign: "center" }} />
+                        <span style={{ fontSize: 10, color: "#888" }}>0.3 Implicit</span>
+                    </div>
+                </div>
+            </div>
+
+            <div style={{ background: "#252526", padding: 20, borderRadius: 8, border: "1px solid #444" }}>
+                <h4 style={{ margin: "0 0 15px 0", color: "#2196f3" }}>Anti-Spam & Evenimente</h4>
+                <div style={styles.settingRow}>
+                    <label style={{ color: "#ccc" }}>Pauză evenimente (secunde)</label>
+                    <input type="number" value={events.cooldown_seconds || 30} onChange={e => updateEvent("cooldown_seconds", parseInt(e.target.value))} style={styles.inputNum} />
+                </div>
+                <div style={styles.settingRow}>
+                    <label style={{ color: "#ccc" }}>Deplasare minimă (Pixeli)</label>
+                    <input type="number" value={filter.min_displacement_pixels || 50} onChange={e => updateFilter("min_displacement_pixels", parseInt(e.target.value))} style={styles.inputNum} />
+                </div>
+            </div>
+
+            <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end" }}>
+                <button onClick={handleSave} style={{ ...styles.btnPrimary, background: "#2196f3" }}>
+                    Salvează Configurația
+                </button>
+            </div>
+        </div>
+    );
+}
+
 export function ChannelSettingsSection({
     cam, cams, setCams, setSelection, availableModules, updateCam, saveAll
 }) {
+    const [activeTab, setActiveTab] = useState('zones');
     const [activeZoneIdx, setActiveZoneIdx] = useState(0);
     const [isDrawing, setIsDrawing] = useState(false);
     const [roiPoints, setRoiPoints] = useState([]);
@@ -461,117 +575,161 @@ export function ChannelSettingsSection({
                 <button onClick={() => setSelection({ type: "CAMERA", id: cam.id })} style={{ color: "rgb(66, 165, 245)", background: "none", border: "none", cursor: "pointer", fontSize: 13 }}>[Back] Back to Hardware Settings</button>
             </div>
 
-            <div style={{ display: "flex", gap: 20, height: 500 }}>
-                <div style={{ flex: 3, display: "flex", flexDirection: "column" }}>
-                    {/* FIXED ASPECT RATIO 16:9 to match Camera Stream and ensure Canvas overlay aligns perfectly */}
-                    <div style={{ width: "100%", aspectRatio: "16/9", border: "2px solid #444", borderRadius: 4, overflow: "hidden", background: "#000", position: "relative" }}>
-                        <Go2RTCPlayer camId={cam.id} style={videoStyle} streamType="hd" />
-                        <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }}>
-                            {activeZone ? (
-                                <CanvasROI
-                                    points={pointsToShow}
-                                    onChange={isDrawing ? setRoiPoints : undefined}
-                                    readOnly={!isDrawing}
-                                    width={800} height={450}
-                                    otherZones={zones.filter((_, i) => i !== safeIdx)}
-                                />
-                            ) : (
-                                <div style={{ color: "#fff", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)" }}>Select or Add a Zone</div>
-                            )}
-                        </div>
-                    </div>
-
-                    {activeZone && (
-                        <div style={{ marginTop: 10, display: "flex", gap: 10, padding: 8, background: "#252526", borderRadius: 4, border: "1px solid #333", alignItems: "center" }}>
-                            <span style={{ fontSize: 12, color: "#aaa", fontWeight: "bold", marginRight: 10 }}>Zone Actions:</span>
-                            {isDrawing ? (
-                                <>
-                                    <button style={{ ...styles.btnPrimary, background: "#4caf50" }} onClick={handleSaveZonePoints}>[SAVE] Save Area</button>
-                                    <button style={styles.btnToolbar} onClick={() => { setIsDrawing(false); setRoiPoints([]); }}>Cancel</button>
-                                </>
-                            ) : (
-                                <button style={{ ...styles.btnPrimary, background: "#2196f3" }} onClick={() => { setRoiPoints(activeZone.points || []); setIsDrawing(true); }}>[EDIT] Edit Area</button>
-                            )}
-                        </div>
-                    )}
-                </div>
-
-                <div style={{ flex: 1, background: "#1e1e1e", border: "1px solid #444", padding: 15, display: "flex", flexDirection: "column" }}>
-                    <div style={{ marginBottom: 20, flex: 1, overflowY: "auto" }}>
-                        <div style={{ borderBottom: "1px solid #444", marginBottom: 15, paddingBottom: 15 }}>
-                            <h4 style={{ margin: "0 0 10px 0", color: colors.accent, fontSize: 13 }}>AI Configuration</h4>
-                            <div style={{ marginBottom: 15 }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-                                    <label style={{ fontSize: 12, color: "#aaa" }}>Sensitivity: {(cam.ai_server?.sensitivity * 100 || 50).toFixed(0)}%</label>
-                                </div>
-                                <input
-                                    type="range" min="0" max="1" step="0.05"
-                                    value={cam.ai_server?.sensitivity || 0.5}
-                                    onChange={e => {
-                                        const next = { ...cam.ai_server, sensitivity: parseFloat(e.target.value) };
-                                        const updated = cams.map(c => c.id === cam.id ? { ...c, ai_server: next } : c);
-                                        setCams(updated); silentSave(updated);
-                                    }}
-                                    style={{ width: "100%", cursor: "pointer" }}
-                                />
-                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#666", marginTop: 4 }}>
-                                    <span>0% (Filtrare Maximă)</span>
-                                    <span>100% (Alertă Maximă)</span>
-                                </div>
-                                <p style={{ fontSize: 11, color: "#888", marginTop: 8, lineHeight: "1.4" }}>
-                                    <b>0%:</b> Doar obiecte foarte clare. Reduce alarmele false (umbre, insecte).<br />
-                                    <b>100%:</b> Detectează orice mișcare suspectă. Risc ridicat de alarme false.
-                                </p>
-                            </div>
-                        </div>
-
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                            <h4 style={{ margin: 0, color: "#ddd" }}>Detection Zones</h4>
-                            <button style={{ background: "#4caf50", color: "#fff", border: "none", borderRadius: 2, cursor: "pointer", padding: "2px 8px", fontSize: 16 }} onClick={handleAddZone}>+</button>
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                            {zones.map((z, idx) => (
-                                <div key={idx} onClick={() => { setActiveZoneIdx(idx); setIsDrawing(false); }}
-                                    style={{ padding: "8px 10px", background: idx === safeIdx ? "#2196f3" : "#333", color: "#fff", borderRadius: 3, cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between" }}>
-                                    <span>{z.name}</span>
-                                    {idx === safeIdx && <button onClick={(e) => { e.stopPropagation(); handleDeleteZone(); }} style={{ background: "transparent", border: "none", color: "#fff", cursor: "pointer" }}>×</button>}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    {activeZone && (
-                        <div style={{ borderTop: "1px solid #444", paddingTop: 15 }}>
-                            <h4 style={{ marginTop: 0, color: "#ddd", fontSize: 13 }}>Search Objects ({activeZone.name})</h4>
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
-                                {(() => {
-                                    const currentModName = cam.ai_server?.module || "ai_small";
-                                    const modulesList = Array.isArray(availableModules) ? availableModules : [];
-                                    const currentMod = modulesList.find(m => m.name === currentModName);
-                                    const displayClasses = currentMod?.classes?.length > 0 ? currentMod.classes : ["person", "car", "truck"];
-                                    return displayClasses.map(obj => (
-                                        <label key={obj} style={{ display: "flex", alignItems: "center", color: "#ccc", fontSize: 13, cursor: "pointer" }}>
-                                            <input type="checkbox" checked={activeZone.objects?.[obj] || false} onChange={() => handleObjectToggle(obj)} style={{ marginRight: 8 }} />
-                                            {obj}
-                                        </label>
-                                    ));
-                                })()}
-                            </div>
-                        </div>
-                    )}
-
-                    <div style={{ borderTop: "1px solid #444", marginTop: 15, paddingTop: 15 }}>
-                        <h4 style={{ margin: "0 0 10px 0", color: "#ddd", fontSize: 13 }}>Recording Setup</h4>
-                        <label style={{ display: "flex", alignItems: "center", marginBottom: 10, cursor: "pointer", color: "#ccc", fontSize: 13 }}>
-                            <input type="checkbox" checked={cam.record !== false} onChange={e => {
-                                const updatedCams = cams.map(c => c.id === cam.id ? { ...c, record: e.target.checked } : c);
-                                setCams(updatedCams); silentSave(updatedCams);
-                            }} style={{ marginRight: 8 }} />
-                            Enable Recording
-                        </label>
-                    </div>
-                </div>
+            {/* Tab Navigation */}
+            <div style={{ display: "flex", gap: 5, marginBottom: 15, borderBottom: "1px solid #333" }}>
+                <button
+                    onClick={() => setActiveTab('zones')}
+                    style={{
+                        padding: "10px 20px",
+                        background: activeTab === 'zones' ? "#2196f3" : "transparent",
+                        color: activeTab === 'zones' ? "#fff" : "#888",
+                        border: "none",
+                        cursor: "pointer",
+                        fontWeight: "bold"
+                    }}
+                >
+                    Zones & Detection
+                </button>
+                <button
+                    onClick={() => setActiveTab('advanced')}
+                    style={{
+                        padding: "10px 20px",
+                        background: activeTab === 'advanced' ? "#2196f3" : "transparent",
+                        color: activeTab === 'advanced' ? "#fff" : "#888",
+                        border: "none",
+                        cursor: "pointer",
+                        fontWeight: "bold"
+                    }}
+                >
+                    Advanced AI
+                </button>
             </div>
+
+            {activeTab === 'zones' ? (
+                <div style={{ display: "flex", gap: 20, height: 500 }}>
+                    <div style={{ flex: 3, display: "flex", flexDirection: "column" }}>
+                        {/* FIXED ASPECT RATIO 16:9 container */}
+                        <div style={{ width: "100%", aspectRatio: "16/9", border: "2px solid #444", borderRadius: 4, overflow: "hidden", background: "#000", position: "relative" }}>
+                            {/* THE VIDEO - Forced to fill the 16:9 box exactly */}
+                            <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}>
+                                <Go2RTCPlayer
+                                    camId={cam.id}
+                                    streamType="hd"
+                                    style={{ width: "100%", height: "100%", objectFit: "fill" }}
+                                />
+                            </div>
+
+                            {/* THE DRAWING LAYER - Exact same size as video */}
+                            <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 }}>
+                                {activeZone ? (
+                                    <CanvasROI
+                                        points={pointsToShow}
+                                        onChange={isDrawing ? setRoiPoints : undefined}
+                                        readOnly={!isDrawing}
+                                        otherZones={zones.filter((_, i) => i !== safeIdx)}
+                                    />
+                                ) : (
+                                    <div style={{ color: "#fff", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", pointerEvents: "none" }}>
+                                        Select or Add a Zone
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {activeZone && (
+                            <div style={{ marginTop: 10, display: "flex", gap: 10, padding: 8, background: "#252526", borderRadius: 4, border: "1px solid #333", alignItems: "center" }}>
+                                <span style={{ fontSize: 12, color: "#aaa", fontWeight: "bold", marginRight: 10 }}>Zone Actions:</span>
+                                {isDrawing ? (
+                                    <>
+                                        <button style={{ ...styles.btnPrimary, background: "#4caf50" }} onClick={handleSaveZonePoints}>[SAVE] Save Area</button>
+                                        <button style={styles.btnToolbar} onClick={() => { setIsDrawing(false); setRoiPoints([]); }}>Cancel</button>
+                                    </>
+                                ) : (
+                                    <button style={{ ...styles.btnPrimary, background: "#2196f3" }} onClick={() => { setRoiPoints(activeZone.points || []); setIsDrawing(true); }}>[EDIT] Edit Area</button>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    <div style={{ flex: 1, background: "#1e1e1e", border: "1px solid #444", padding: 15, display: "flex", flexDirection: "column" }}>
+                        <div style={{ marginBottom: 20, flex: 1, overflowY: "auto" }}>
+                            <div style={{ borderBottom: "1px solid #444", marginBottom: 15, paddingBottom: 15 }}>
+                                <h4 style={{ margin: "0 0 10px 0", color: colors.accent, fontSize: 13 }}>AI Configuration</h4>
+                                <div style={{ marginBottom: 15 }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                                        <label style={{ fontSize: 12, color: "#aaa" }}>Sensitivity: {(cam.ai_server?.sensitivity * 100 || 50).toFixed(0)}%</label>
+                                    </div>
+                                    <input
+                                        type="range" min="0" max="1" step="0.05"
+                                        value={cam.ai_server?.sensitivity || 0.5}
+                                        onChange={e => {
+                                            const next = { ...cam.ai_server, sensitivity: parseFloat(e.target.value) };
+                                            const updated = cams.map(c => c.id === cam.id ? { ...c, ai_server: next } : c);
+                                            setCams(updated); silentSave(updated);
+                                        }}
+                                        style={{ width: "100%", cursor: "pointer" }}
+                                    />
+                                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#666", marginTop: 4 }}>
+                                        <span>0% (Filtrare Maximă)</span>
+                                        <span>100% (Alertă Maximă)</span>
+                                    </div>
+                                    <p style={{ fontSize: 11, color: "#888", marginTop: 8, lineHeight: "1.4" }}>
+                                        <b>0%:</b> Doar obiecte foarte clare. Reduce alarmele false (umbre, insecte).<br />
+                                        <b>100%:</b> Detectează orice mișcare suspectă. Risc ridicat de alarme false.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                                <h4 style={{ margin: 0, color: "#ddd" }}>Detection Zones</h4>
+                                <button style={{ background: "#4caf50", color: "#fff", border: "none", borderRadius: 2, cursor: "pointer", padding: "2px 8px", fontSize: 16 }} onClick={handleAddZone}>+</button>
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                {zones.map((z, idx) => (
+                                    <div key={idx} onClick={() => { setActiveZoneIdx(idx); setIsDrawing(false); }}
+                                        style={{ padding: "8px 10px", background: idx === safeIdx ? "#2196f3" : "#333", color: "#fff", borderRadius: 3, cursor: "pointer", fontSize: 13, display: "flex", justifyContent: "space-between" }}>
+                                        <span>{z.name}</span>
+                                        {idx === safeIdx && <button onClick={(e) => { e.stopPropagation(); handleDeleteZone(); }} style={{ background: "transparent", border: "none", color: "#fff", cursor: "pointer" }}>×</button>}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {activeZone && (
+                            <div style={{ borderTop: "1px solid #444", paddingTop: 15 }}>
+                                <h4 style={{ marginTop: 0, color: "#ddd", fontSize: 13 }}>Search Objects ({activeZone.name})</h4>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+                                    {(() => {
+                                        const currentModName = cam.ai_server?.module || "ai_small";
+                                        const modulesList = Array.isArray(availableModules) ? availableModules : [];
+                                        const currentMod = modulesList.find(m => m.name === currentModName);
+                                        const displayClasses = currentMod?.classes?.length > 0 ? currentMod.classes : ["person", "car", "truck"];
+                                        return displayClasses.map(obj => (
+                                            <label key={obj} style={{ display: "flex", alignItems: "center", color: "#ccc", fontSize: 13, cursor: "pointer" }}>
+                                                <input type="checkbox" checked={activeZone.objects?.[obj] || false} onChange={() => handleObjectToggle(obj)} style={{ marginRight: 8 }} />
+                                                {obj}
+                                            </label>
+                                        ));
+                                    })()}
+                                </div>
+                            </div>
+                        )}
+
+                        <div style={{ borderTop: "1px solid #444", marginTop: 15, paddingTop: 15 }}>
+                            <h4 style={{ margin: "0 0 10px 0", color: "#ddd", fontSize: 13 }}>Recording Setup</h4>
+                            <label style={{ display: "flex", alignItems: "center", marginBottom: 10, cursor: "pointer", color: "#ccc", fontSize: 13 }}>
+                                <input type="checkbox" checked={cam.record !== false} onChange={e => {
+                                    const updatedCams = cams.map(c => c.id === cam.id ? { ...c, record: e.target.checked } : c);
+                                    setCams(updatedCams); silentSave(updatedCams);
+                                }} style={{ marginRight: 8 }} />
+                                Enable Recording
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            ) : (
+                <AdvancedAITab camId={cam.id} />
+            )}
         </div>
     );
 }

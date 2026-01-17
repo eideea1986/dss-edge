@@ -188,6 +188,22 @@ function AntiSpamSettings() {
                             <label>Stability Frames (Confirmation)</label>
                             <input type="number" value={config.false_detection_filter?.stability_frames} onChange={e => updateFilter("stability_frames", parseInt(e.target.value))} style={{ width: 60 }} />
                         </div>
+
+                        <div className="setting-row" style={{ borderTop: "1px dashed #444", paddingTop: 10, marginTop: 10 }}>
+                            <label style={{ color: "#4caf50" }}>AI Sensitivity (Threshold)</label>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <input
+                                    type="number"
+                                    step="0.05"
+                                    min="0.1"
+                                    max="1.0"
+                                    value={config.false_detection_filter?.threshold ?? 0.3}
+                                    onChange={e => updateFilter("threshold", parseFloat(e.target.value))}
+                                    style={{ width: 60, textAlign: 'center', borderColor: '#4caf50' }}
+                                />
+                                <span style={{ fontSize: 10, color: "#888" }}>0.3 Default</span>
+                            </div>
+                        </div>
                     </div>
 
                     {/* EVENT MANAGER */}
@@ -208,7 +224,8 @@ function AntiSpamSettings() {
                         </div>
                     </div>
                 </div>
-            )}
+            )
+            }
 
             {/* Save Button */}
             <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end" }}>
@@ -229,7 +246,7 @@ function AntiSpamSettings() {
                 .spin { animation: spin 1s linear infinite; }
                 @keyframes spin { 100% { transform: rotate(360deg); } }
             `}</style>
-        </div>
+        </div >
     );
 }
 

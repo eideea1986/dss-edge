@@ -1,27 +1,42 @@
 const { Client } = require('ssh2');
-const fs = require('fs');
-const config = { host: '192.168.120.208', port: 22, username: 'root', password: 'TeamS_2k25!' };
+
+const config = {
+    host: '192.168.120.208',
+    port: 22,
+    username: 'root',
+    password: 'TeamS_2k25!'
+};
+
+const FILES = [
+    { local: 'i:/dispecerat/github_release/dss-edge/local-api/routes/recorder.js', remote: '/opt/dss-edge/local-api/routes/recorder.js' },
+    { local: 'i:/dispecerat/github_release/dss-edge/local-api/playback/SegmentSelector.js', remote: '/opt/dss-edge/local-api/playback/SegmentSelector.js' }
+];
+
 const conn = new Client();
 conn.on('ready', () => {
+    console.log('SSH Ready - Deploying Playback Fixes');
     conn.sftp((err, sftp) => {
         if (err) throw err;
 
-        const files = [
-            { local: 'i:/dispecerat/github_release/dss-edge/local-api/routes/playback.js', remote: '/opt/dss-edge/local-api/routes/playback.js' },
-            { local: 'i:/dispecerat/github_release/dss-edge/local-api/server.js', remote: '/opt/dss-edge/local-api/server.js' }
-        ];
+        let pending = FILES.length;
+        const checkDone = () => {
+            pending--;
+            if (pending === 0) {
+                console.log("All files uploaded. Restarting API...");
+                conn.exec('pm2 restart dss-edge-api', (err, stream) => {
+                    stream.on('close', () => {
+                        console.log("API Restarted.");
+                        conn.end();
+                    });
+                });
+            }
+        };
 
-        let done = 0;
-        files.forEach(f => {
+        FILES.forEach(f => {
             sftp.fastPut(f.local, f.remote, (err) => {
-                if (err) console.error('Upload error:', err);
-                else console.log(`Uploaded ${f.remote}`);
-
-                done++;
-                if (done === files.length) {
-                    console.log('Restarting dss-edge...');
-                    conn.exec('systemctl restart dss-edge', () => conn.end());
-                }
+                if (err) console.error("Upload failed for " + f.remote, err);
+                else console.log("Uploaded " + f.remote);
+                checkDone();
             });
         });
     });

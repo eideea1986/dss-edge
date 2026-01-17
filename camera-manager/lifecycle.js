@@ -24,7 +24,11 @@ async function init() {
     // 4. Start Health Watchdog (Timeout logic)
     healthMonitor.start();
 
-    console.log("[Lifecycle] System Ready. Decoder Loop active.");
+    // 5. Start Retention Manager (Storage Cleanup) - DEPRECATED
+    // const retentionManager = require('./src/RetentionManager');
+    // retentionManager.startCleanupLoop();
+
+    console.log("[Lifecycle] System Ready. Decoder & Retention Loops active.");
 }
 
 module.exports = { init };

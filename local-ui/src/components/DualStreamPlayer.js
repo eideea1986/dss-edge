@@ -131,48 +131,51 @@ export default function SmartDualStreamPlayer({ camId, isFullscreen, isHidden, i
         };
     }, [camId, isHidden, isFullscreen]);
 
-    // SMART WARM STANDBY: Pre-connect main stream on HOVER or FULLSCREEN
+    // SMART WARM STANDBY with DEBOUNCE: Pre-connect main stream on sustained HOVER or FULLSCREEN
     useEffect(() => {
-        const shouldPreconnect = (isHovered || isFullscreen) && !isHidden && camId;
-
-        if (!shouldPreconnect) {
-            // Release main stream when not needed
-            if (mainStream) {
-                releaseStream(camId, "hd");
-                setMainStream(null);
-            }
-            return;
-        }
-
-        let active = true;
+        let debounceTimer;
         let mainEntry;
 
-        acquireStream(camId, "hd")
-            .then((main) => {
-                if (!active) {
-                    releaseStream(camId, "hd");
-                    return;
-                }
-                mainEntry = main;
-                setMainStream(main);
-
-                // If fullscreen, attach immediately
-                if (isFullscreen && videoRef.current) {
-                    videoRef.current.srcObject = main.media;
-                    videoRef.current.play().catch(() => { });
-                    setCurrentStream("main");
-                }
-                // If just hovering, DON'T attach (warm standby)
-            })
-            .catch((err) => {
-                console.error(`[SmartDual] Error for main ${camId}:`, err);
-            });
-
-        return () => {
-            active = false;
+        const cleanup = () => {
+            if (debounceTimer) clearTimeout(debounceTimer);
             if (mainEntry) releaseStream(camId, "hd");
         };
-    }, [isHovered, isFullscreen, camId, isHidden, mainStream]);
+
+        // Immediate connection for fullscreen
+        if (isFullscreen && !isHidden && camId) {
+            acquireStream(camId, "hd")
+                .then((main) => {
+                    mainEntry = main;
+                    setMainStream(main);
+                    if (videoRef.current) {
+                        videoRef.current.srcObject = main.media;
+                        videoRef.current.play().catch(() => { });
+                        setCurrentStream("main");
+                    }
+                })
+                .catch((err) => console.error(`[SmartDual] Error for main ${camId}:`, err));
+        }
+        // Debounced connection for hover (800ms delay)
+        else if (isHovered && !isHidden && camId && !isFullscreen) {
+            debounceTimer = setTimeout(() => {
+                console.log(`[SmartDual] Hover sustained - pre-connecting main for ${camId}`);
+                acquireStream(camId, "hd")
+                    .then((main) => {
+                        mainEntry = main;
+                        setMainStream(main);
+                        // Don't attach - warm standby only
+                    })
+                    .catch((err) => console.error(`[SmartDual] Error for main ${camId}:`, err));
+            }, 800);
+        }
+        // Release main stream when not needed
+        else if (mainStream && !isFullscreen && !isHovered) {
+            releaseStream(camId, "hd");
+            setMainStream(null);
+        }
+
+        return cleanup;
+    }, [isHovered, isFullscreen, camId, isHidden]);
 
     // INSTANT SWITCH when fullscreen changes
     useEffect(() => {

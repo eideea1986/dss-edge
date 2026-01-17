@@ -1,70 +1,51 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { API } from '../api';
-// We assume Hls is available via window.Hls or installed. 
-// Since we don't have package.json control easily, we'll try to use window.Hls if loaded from CDN, 
-// or import it if the environment supports it. The previous code used a CDN script injection fallback.
-// Let's stick to the previous robust pattern but simpler.
+import React, { useEffect, useRef } from 'react';
 
-export default function RecorderPlayer({ camId, streamType, style }) {
+export default function RecorderPlayer({ camId, hlsUrl: propHlsUrl, style }) {
     const videoRef = useRef(null);
     const hlsRef = useRef(null);
-    const [hlsUrl, setHlsUrl] = useState(null);
-    const [error, setError] = useState(null);
-    const [loading, setLoading] = useState(true);
 
-    // 1. Fetch HLS URL
     useEffect(() => {
-        setLoading(true);
-        setError(null);
-        const mode = streamType === 'hd' ? 'main' : 'sub';
-
-        API.get(`/recorder/live-url/${camId}/${mode}`)
-            .then(res => {
-                // Determine full URL
-                let url = res.data.url;
-                if (url.startsWith("/")) url = API.defaults.baseURL + url;
-                setHlsUrl(url);
-            })
-            .catch(e => {
-                setError("Nu există flux live.");
-                setLoading(false);
-            });
-    }, [camId, streamType]);
-
-    // 2. Init Player
-    useEffect(() => {
-        if (!hlsUrl) return;
-
         const video = videoRef.current;
+        if (!video) return;
+
+        const hlsUrl = propHlsUrl || `/api/playback/live/${camId}.m3u8`;
 
         const initHls = () => {
             if (window.Hls && window.Hls.isSupported()) {
                 if (hlsRef.current) hlsRef.current.destroy();
 
                 const hls = new window.Hls({
+                    debug: false,
                     enableWorker: true,
-                    lowLatencyMode: true,
-                    backBufferLength: 90
+                    manifestLoadingTimeOut: 10000,
                 });
 
                 hls.loadSource(hlsUrl);
                 hls.attachMedia(video);
 
                 hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
-                    video.play().catch(e => console.warn("Autoplay block", e));
-                    setLoading(false);
+                    console.log('[RecorderPlayer] Manifest parsed');
+                    video.play().catch(e => console.warn("Autoplay blocked", e));
+                });
+
+                hls.on(window.Hls.Events.MANIFEST_LOADED, (event, data) => {
+                    console.log('[RecorderPlayer] Manifest loaded, live:', data.details.live);
                 });
 
                 hls.on(window.Hls.Events.ERROR, (event, data) => {
                     if (data.fatal) {
+                        console.error('[RecorderPlayer] Fatal error:', data.type, data.details);
                         switch (data.type) {
                             case window.Hls.ErrorTypes.NETWORK_ERROR:
-                                hls.startLoad();
+                                console.log('[RecorderPlayer] Recovering from network error...');
+                                setTimeout(() => hls.startLoad(), 1000);
                                 break;
                             case window.Hls.ErrorTypes.MEDIA_ERROR:
+                                console.log('[RecorderPlayer] Recovering from media error...');
                                 hls.recoverMediaError();
                                 break;
                             default:
+                                console.error('[RecorderPlayer] Unrecoverable error');
                                 hls.destroy();
                                 break;
                         }
@@ -73,16 +54,11 @@ export default function RecorderPlayer({ camId, streamType, style }) {
 
                 hlsRef.current = hls;
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                // iOS / Safari
                 video.src = hlsUrl;
-                video.addEventListener('loadedmetadata', () => {
-                    video.play();
-                    setLoading(false);
-                });
+                video.addEventListener('loadedmetadata', () => video.play());
             }
         };
 
-        // Load Lib if missing
         if (!window.Hls && typeof Hls === 'undefined') {
             const script = document.createElement('script');
             script.src = "https://cdn.jsdelivr.net/npm/hls.js@1.4.0/dist/hls.min.js";
@@ -95,27 +71,22 @@ export default function RecorderPlayer({ camId, streamType, style }) {
         return () => {
             if (hlsRef.current) hlsRef.current.destroy();
         };
-    }, [hlsUrl]);
+    }, [camId]);
 
     return (
         <div style={{ ...style, position: 'relative', background: '#000', overflow: 'hidden' }}>
             <video
                 ref={videoRef}
-                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'contain',
+                    display: 'block'
+                }}
                 autoPlay
                 muted
                 playsInline
             />
-            {(loading || !hlsUrl) && !error && (
-                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', background: 'rgba(0,0,0,0.5)' }}>
-                    <div className="spinner">Live Buffer...</div>
-                </div>
-            )}
-            {error && (
-                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ff5555' }}>
-                    {error}
-                </div>
-            )}
         </div>
     );
 }

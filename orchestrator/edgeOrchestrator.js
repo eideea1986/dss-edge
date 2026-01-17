@@ -268,6 +268,22 @@ function startIndexer() {
 }
 
 /**
+ * 7. CLEANUP ORPHAN PLAYBACK PROCESSES
+ */
+function cleanupOrphanFFmpeg() {
+    exec("ps -eo pid,cmd | grep ffmpeg | grep -E 'probesize|analyzeduration' | grep -v grep | awk '{print $1}'", (err, stdout) => {
+        if (err || !stdout.trim()) return;
+        const pids = stdout.trim().split('\n');
+        if (pids.length > 0) {
+            log(`Killing ${pids.length} orphan playback FFmpeg processes`);
+            pids.forEach(pid => {
+                try { exec(`kill -9 ${pid}`); } catch (e) { }
+            });
+        }
+    });
+}
+
+/**
  * 7. INITIALIZATION
  */
 function init() {
@@ -280,6 +296,7 @@ function init() {
     setInterval(runSystemChecks, 15000);
     setInterval(updateProcesses, 15000); // 15s check
     setInterval(applyPriorities, 60000);
+    setInterval(cleanupOrphanFFmpeg, 60000); // 60s orphan cleanup
 
     // Heartbeats
     setInterval(() => {

@@ -1,35 +1,66 @@
-/* aiRequest.js - AI Producer (Queue + Temporal Window) */
 const axios = require('axios');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const path = require('path');
-const { exec } = require('child_process');
 const EventEmitter = require('events');
+const os = require('os');
+const cameraStore = require('../store/cameraStore');
+const { isArmed } = require('../../camera-manager/armingLogic');
+let createCanvas, loadImage;
+try {
+    const c = require('canvas');
+    createCanvas = c.createCanvas;
+    loadImage = c.loadImage;
+} catch (e) {
+    // console.warn("[AI] Canvas module missing (Optional).");
+}
 
 const CAM_CONFIG_PATH = path.join(__dirname, '../../config/cameras.json');
 const AI_CONFIG_PATH = path.join(__dirname, '../ai_config.json');
+const EDGE_CONFIG_PATH = path.join(__dirname, '../../config/edge.json');
 
-// Tuning Constants (Trassir style)
-const MAX_CONCURRENT_REQUESTS = 2; // Protect HUB from overload
-const SAMPLING_INTERVAL_MS = 1000; // Max 1 frame analysis per sec per cam
-const REQUEST_TIMEOUT_MS = 3000;   // Fail fast
+// ENTERPRISE TUNING
+const DEBOUNCE_INTERVAL_MS = 2000;
 const HUB_DEFAULT_URL = "http://192.168.120.205:8080/api/hub/analyze";
+const MIN_ZONE_INTERSECTION = 0.30;
 
 class AIRequestManager extends EventEmitter {
     constructor() {
         super();
-        this.config = { hub_url: HUB_DEFAULT_URL, active_module: "yolo", enabled: true };
+        this.config = { hub_url: HUB_DEFAULT_URL, active_module: "ai_small", enabled: true };
+        this.edgeConfig = { name: "DSS-Edge", locationId: "LOC000" };
         this.cameras = [];
         this.loadConfigs();
 
-        // Queue System
         this.queue = [];
         this.activeRequests = 0;
+        this.cameraStates = new Map(); // { lastTriggerTs, prevBuffer (for JS motion) }
 
-        // State Tracking per Camera (for Temporal Window)
-        this.cameraStates = new Map(); // camId -> { lastProcessedTs: number }
+        // Native Motion
+        this.libMotion = null;
+        this.detectors = new Map();
+        this.initNativeFilter();
 
-        // Start Queue Processor
         setInterval(() => this.processQueue(), 100);
+        setInterval(() => this.pipelineTick(), 1000);
+        setInterval(() => this.loadConfigs(), 60000);
+    }
+
+    initNativeFilter() {
+        try {
+            const koffi = require('koffi');
+            const libPath = path.join(__dirname, '../native/libmotionfilter.so');
+            if (fs.existsSync(libPath)) {
+                this.libMotion = koffi.load(libPath);
+                this.fnCreate = this.libMotion.func('void* create_detector(int width, int height, double minAreaRatio, int minFrames, double maxStaticVariance)');
+                this.fnProcess = this.libMotion.func('int process_frame_file(void* handle, const char* imagePath)');
+                this.fnDestroy = this.libMotion.func('void destroy_detector(void* handle)');
+                console.log("[AI] Native Motion Filter: ACTIVE");
+            }
+        } catch (e) {
+            console.log("[AI] Native Motion Filter: UNAVAILABLE (Using Software Fallback)");
+        }
     }
 
     loadConfigs() {
@@ -38,190 +69,268 @@ class AIRequestManager extends EventEmitter {
                 const loaded = JSON.parse(fs.readFileSync(AI_CONFIG_PATH, 'utf8'));
                 this.config = { ...this.config, ...loaded };
             }
-            if (!this.config.hub_url) this.config.hub_url = HUB_DEFAULT_URL;
-
-            if (fs.existsSync(CAM_CONFIG_PATH)) {
-                this.cameras = JSON.parse(fs.readFileSync(CAM_CONFIG_PATH, 'utf8'));
+            if (!this.config.hub_url || this.config.hub_url.includes("127.0.0.1")) {
+                this.config.hub_url = HUB_DEFAULT_URL;
             }
-        } catch (e) { console.error("[AI] Config Load Error:", e.message); }
+            if (fs.existsSync(CAM_CONFIG_PATH)) this.cameras = JSON.parse(fs.readFileSync(CAM_CONFIG_PATH, 'utf8'));
+            if (fs.existsSync(EDGE_CONFIG_PATH)) this.edgeConfig = JSON.parse(fs.readFileSync(EDGE_CONFIG_PATH, 'utf8'));
+        } catch (e) { }
     }
 
-    // Public Entry Point
-    async handleMotion(camId) {
-        this.loadConfigs();
-        const cam = this.cameras.find(c => c.id === camId);
+    async pipelineTick() {
+        const cams = cameraStore.list();
+        for (const cam of cams) {
+            if (cam.status === "ONLINE") this.runPipelineForCamera(cam.id);
+        }
+    }
+
+    async runPipelineForCamera(camId) {
+        const cam = cameraStore.get(camId);
         if (!cam) return;
 
-        // CRITICAL: Status Check
-        if (cam.status !== "ONLINE" && cam.enabled !== true) {
-            // Fallback to enabled if status missing, but strict preference for status
-            if (cam.status && cam.status !== "ONLINE") return;
-            if (!cam.status && !cam.enabled) return;
+        // 1. CONFIG CHECK
+        if (!cam.ai_server || !cam.ai_server.enabled) {
+            // Only log this rarely or once per startup to avoid spam, but for debug now:
+            // console.log(`[AI] ${camId}: AI Disabled`);
+            return;
+        }
+        if (!cam.ai_server.zones || cam.ai_server.zones.length === 0) {
+            // console.log(`[AI] ${camId}: No Zones Defined`);
+            return;
         }
 
-        // 1. Arming Check
-        const isArmed = cam.ai_server?.enabled || cam.ai || false;
-        if (!isArmed) return;
+        // 2. ARMING CHECK
+        if (!isArmed(cam)) {
+            // Debug log to see WHY it's disarmed
+            // console.log(`[AI] ${camId}: Camera Disarmed`);
+            return;
+        }
 
-        // 2. Temporal Sampling (Throttle)
+        // 3. DEBOUNCE
         const now = Date.now();
-        const camState = this.cameraStates.get(camId) || { lastProcessedTs: 0 };
+        let state = this.cameraStates.get(camId) || { lastTriggerTs: 0, prevBuffer: null };
+        if (now - state.lastTriggerTs < DEBOUNCE_INTERVAL_MS) return; // Debounce silent
 
-        if (now - camState.lastProcessedTs < SAMPLING_INTERVAL_MS) {
-            // Drop frame (sampling/debounce frame capture)
+        // 4. FRAME ACQUISITION
+        const ramDiskPath = path.resolve(__dirname, '../../recorder/ramdisk/snapshots', `${camId}.jpg`);
+        if (!fs.existsSync(ramDiskPath)) return;
+        const stats = fs.statSync(ramDiskPath);
+        if (now - stats.mtimeMs > 3000) {
+            // console.log(`[AI] ${camId}: Stale Snapshot (>3s)`);
             return;
         }
 
-        // 3. Queue Admittance
-        // If queue too full, drop oldest or drop current? Drop current to behave like realtime shedder
-        if (this.queue.length > 5) {
-            console.warn(`[AI] Queue full (>5), dropping frame for ${camId}`);
+        // 5. MOTION DETECTION (Hybrid)
+        let motionDetected = false;
+        let method = "NONE";
+
+        // Native
+        if (this.libMotion) {
+            let detector = this.detectors.get(camId);
+            if (!detector) {
+                detector = this.fnCreate(640, 360, 0.005, 1, 25.0);
+                this.detectors.set(camId, detector);
+            }
+            const res = this.fnProcess(detector, ramDiskPath);
+            if (res > 0) {
+                motionDetected = true;
+                method = "NATIVE";
+            }
+        }
+
+        // Software Fallback
+        if (!motionDetected) {
+            const currentBuffer = fs.readFileSync(ramDiskPath);
+            if (state.prevBuffer && state.prevBuffer.length > 0) {
+                const diff = this.calculateBufferDiff(state.prevBuffer, currentBuffer);
+                if (diff > 0.02) {
+                    motionDetected = true;
+                    method = `SOFTWARE (${(diff * 100).toFixed(1)}%)`;
+                }
+            }
+            state.prevBuffer = currentBuffer;
+        }
+
+        if (!motionDetected) {
+            this.cameraStates.set(camId, state);
             return;
         }
 
-        // Add to Queue
+        // TRIGGER ACCEPTED
+        console.log(`[AI] [MOTION AUTHORIZED] ${camId} (Method: ${method}) -> AI REQUEST`);
+
+        state.lastTriggerTs = now;
+        this.cameraStates.set(camId, state);
+
+        // 6. QUEUE JOB
+        const jobBuffer = state.prevBuffer || fs.readFileSync(ramDiskPath); // use cached or fresh
+
         this.queue.push({
             camId,
             timestamp: now,
-            camConfig: cam
+            camConfig: cam,
+            buffer: jobBuffer
         });
 
-        // Update state
-        camState.lastProcessedTs = now;
-        this.cameraStates.set(camId, camState);
+        if (this.queue.length > 5) this.queue.shift();
+    }
+
+    // Simple Buffer Comparison (Byte variance) - Very rough but fast fallback
+    calculateBufferDiff(buf1, buf2) {
+        if (buf1.length !== buf2.length) return 1.0; // Different size = changed
+        let diffs = 0;
+        // Sample 1% of bytes for speed
+        const step = 100;
+        let samples = 0;
+        for (let i = 0; i < buf1.length; i += step) {
+            samples++;
+            if (Math.abs(buf1[i] - buf2[i]) > 20) diffs++; // Threshold 20/255
+        }
+        return diffs / samples;
     }
 
     async processQueue() {
+        if (this.activeRequests >= 2) return;
         if (this.queue.length === 0) return;
-        if (this.activeRequests >= MAX_CONCURRENT_REQUESTS) return;
 
         const task = this.queue.shift();
         this.activeRequests++;
-
-        try {
-            await this.executeTask(task);
-        } catch (e) {
-            console.error(`[AI] Task Failed for ${task.camId}:`, e.message);
-        } finally {
-            this.activeRequests--;
-            // Immediate retry for next task to fill slots
-            setImmediate(() => this.processQueue());
-        }
+        try { await this.executeTask(task); }
+        catch (e) { console.error(`[AI] Error ${task.camId}:`, e.message); }
+        finally { this.activeRequests--; }
     }
 
     async executeTask(task) {
-        const { camId, timestamp, camConfig } = task;
+        const { camId, timestamp, camConfig, buffer } = task;
+        const tmpPath = path.join(os.tmpdir(), `ai_req_${camId}_${timestamp}.jpg`);
+        fs.writeFileSync(tmpPath, buffer);
 
-        // 1. Capture Snapshot (Frame)
-        const tmpPath = path.join(__dirname, `../../tmp/${camId}_${timestamp}.jpg`);
-        // Ensure dir
-        // Instead of ffmpeg, copy from ramdisk snapshot
-        const snapPath = path.join(os.tmpdir(), `ai_${Date.now()}_${camId}.jpg`);
-        const ramDiskPath = path.resolve(__dirname, '../../recorder/ramdisk/snapshots', `${camId}.jpg`);
+        // Normalize Classes & Zones
+        let requiredClasses = new Set();
+        let payloadZones = [];
 
-        try {
-            // Check if we have a fresh snapshot from DecoderManager
-            if (!fs.existsSync(ramDiskPath)) {
-                throw new Error("No fresh snapshot available from Decoder");
-            }
+        camConfig.ai_server.zones.forEach(z => {
+            const objs = Array.isArray(z.objects) ? z.objects : [];
+            // Legacy bools
+            if (z.person) objs.push('person');
+            if (z.car) objs.push('car');
+            if (z.truck) objs.push('truck');
+            if (z.bus) objs.push('bus');
+            if (z.animal) objs.push('dog');
+            objs.forEach(o => requiredClasses.add(o));
 
-            // Fast Copy (Internal memory transfer)
-            fs.copyFileSync(ramDiskPath, snapPath);
-        } catch (error) {
-            console.warn(`[AI] Failed to get snapshot for ${camId}: ${error.message}`);
-            // If snapshot fails, we can't proceed with this task.
-            return; // Exit task execution
-        }
-
-        // LIVENESS CONFIRMED: We got a real frame! (Varianta B)
-        cameraStore.updateLastFrame(task.camId);
-
-        // 2. Pre-process (Crop ROI) - Logic simplified, if needed insert crop here
-        let finalPath = snapPath; // Use snapPath as the initial image for processing
-        if (camConfig.ai_server?.zones?.length > 0 && camConfig.ai_server.zones[0].points) {
-            const cropP = await this.cropImage(snapPath, camConfig.ai_server.zones[0]);
-            if (cropP) finalPath = cropP;
-        }
-
-        // 3. Send to HUB
-        const detections = await this.sendToHub(finalPath, camId);
-
-        // 4. Emit Result (to EventManager)
-        if (detections && detections.length > 0) {
-            this.emit('ai_result', {
-                camId,
-                timestamp,
-                detections,
-                imagePath: finalPath,
-                originalPath: tmpPath
+            payloadZones.push({
+                type: 'INCLUDE',
+                points: z.points,
+                rect: z.x !== undefined ? { x: z.x, y: z.y, w: z.w, h: z.h } : null
             });
+        });
 
-            // Draw boxes for debug/evidence (Async, don't wait)
-            this.drawBoxes(finalPath, detections);
-        } else {
-            // No detection, clean up immediately
+        if (camConfig.ai_server.exclusions) {
+            camConfig.ai_server.exclusions.forEach(z => {
+                payloadZones.push({ type: 'EXCLUDE', points: z.points, rect: z.rect });
+            });
+        }
+
+        if (requiredClasses.size === 0) {
             fs.unlink(tmpPath, () => { });
-            if (finalPath !== tmpPath) fs.unlink(finalPath, () => { });
+            return;
         }
-    }
 
-    async cropImage(imagePath, zone) {
-        if (!zone || !zone.points || zone.points.length === 0) return null;
-        const points = zone.points;
-        const xs = points.map(p => p[0]);
-        const ys = points.map(p => p[1]);
-        const minX = Math.floor(Math.min(...xs));
-        const maxX = Math.ceil(Math.max(...xs));
-        const minY = Math.floor(Math.min(...ys));
-        const maxY = Math.ceil(Math.max(...ys));
-        const w = maxX - minX;
-        const h = maxY - minY;
-        if (w < 10 || h < 10) return null;
+        const detectList = Array.from(requiredClasses);
+        console.log(`[AI] Sending ${camId} -> Hub (Classes: ${detectList.length})`);
 
-        const cropPath = imagePath + ".crop.jpg";
-        return new Promise((resolve) => {
-            exec(`ffmpeg -y -v quiet -i "${imagePath}" -vf "crop=${w}:${h}:${minX}:${minY}" "${cropPath}"`, (err) => {
-                if (err) resolve(null);
-                else resolve(cropPath);
+        const rawResults = await this.sendToHub(tmpPath, camId, this.edgeConfig.name, detectList, payloadZones);
+
+        // Validation (30% Intersection)
+        if (rawResults && rawResults.length > 0) {
+            const validated = rawResults.filter(d => {
+                let bbox = d.box || (typeof d.x === 'number' ? d : null);
+                if (Array.isArray(d)) bbox = { x: d[0], y: d[1], w: d[2], h: d[3] };
+                if (!bbox) return false;
+
+                // Normalize to 0-1
+                if (bbox.x > 1 || bbox.w > 1) {
+                    bbox = { x: bbox.x / 1920, y: bbox.y / 1080, w: bbox.w / 1920, h: bbox.h / 1080 };
+                }
+
+                return this.validateIntersection(bbox, payloadZones);
             });
-        });
-    }
 
-    async sendToHub(imagePath, camId) {
-        try {
-            const imageBuffer = fs.readFileSync(imagePath);
-            const base64Image = imageBuffer.toString('base64');
-
-            const response = await axios.post(this.config.hub_url, {
-                image: base64Image,
-                module: this.config.active_module || 'yolo',
-                camId: camId,
-                origin: "edge-208"
-            }, { timeout: REQUEST_TIMEOUT_MS });
-
-            return response.data.detections;
-        } catch (e) {
-            // console.error(`[AI] Hub/Network Error: ${e.message}`);
-            return null;
+            if (validated.length > 0) {
+                console.log(`[AI] EVENT CONFIRMED: ${camId} (${validated.length} objects)`);
+                this.emit('ai_result', {
+                    camId,
+                    timestamp,
+                    detections: validated,
+                    imagePath: tmpPath,
+                    originalPath: tmpPath
+                });
+                return;
+            }
         }
+        fs.unlink(tmpPath, () => { });
     }
 
-    drawBoxes(filePath, detections) {
-        const validDets = detections.filter(d => d.bbox && d.bbox.length === 4);
-        if (validDets.length === 0) return;
+    async sendToHub(imagePath, camId, origin, detectList, zones) {
+        const url = this.config.hub_url || HUB_DEFAULT_URL;
+        try {
+            const b64 = fs.readFileSync(imagePath).toString('base64');
+            const agentOptions = { localAddress: '10.200.0.3' };
+            const httpAgent = new http.Agent(agentOptions);
+            const httpsAgent = new https.Agent(agentOptions);
+            const res = await axios.post(url, {
+                image: b64, camId, origin, detect: detectList, zones, module: 'ai_small'
+            }, {
+                timeout: 4000,
+                httpAgent,
+                httpsAgent
+            });
+            return (res.data.detections || res.data || []);
+        } catch (e) { return []; }
+    }
 
-        let filters = validDets.map(d => {
-            let [x1, y1, x2, y2] = d.bbox;
-            let w = x2 - x1;
-            let h = y2 - y1;
-            return `drawbox=x=${Math.round(x1)}:y=${Math.round(y1)}:w=${Math.round(w)}:h=${Math.round(h)}:color=red@1.0:t=3`;
-        }).join(',');
+    validateIntersection(bbox, zones) {
+        // Must intersect INCLUDE > 30%
+        const includes = zones.filter(z => z.type === 'INCLUDE');
+        const excludes = zones.filter(z => z.type === 'EXCLUDE');
 
-        const tmpPath = filePath + ".box.jpg";
-        exec(`ffmpeg -v quiet -y -i "${filePath}" -vf "${filters}" "${tmpPath}" && mv "${tmpPath}" "${filePath}"`, (err) => {
-            // Done
-        });
+        const boxArea = bbox.w * bbox.h;
+        if (boxArea === 0) return false;
+
+        let maxOverlap = 0;
+        for (const z of includes) {
+            const zNorm = this.normalizeZone(z);
+            const overlap = this.calcOverlap(bbox, zNorm);
+            if (overlap > maxOverlap) maxOverlap = overlap;
+        }
+
+        if ((maxOverlap / boxArea) < MIN_ZONE_INTERSECTION) return false;
+
+        // Must NOT intersect EXCLUDE (Strict)
+        for (const z of excludes) {
+            if (this.intersects(bbox, this.normalizeZone(z))) return false;
+        }
+        return true;
+    }
+
+    normalizeZone(z) {
+        if (z.points?.length) {
+            const xs = z.points.map(p => p[0]);
+            const ys = z.points.map(p => p[1]);
+            const minX = Math.min(...xs), minY = Math.min(...ys);
+            return { x: minX, y: minY, w: Math.max(...xs) - minX, h: Math.max(...ys) - minY };
+        }
+        return z.rect || { x: 0, y: 0, w: 0, h: 0 };
+    }
+
+    calcOverlap(r1, r2) {
+        return Math.max(0, Math.min(r1.x + r1.w, r2.x + r2.w) - Math.max(r1.x, r2.x)) *
+            Math.max(0, Math.min(r1.y + r1.h, r2.y + r2.h) - Math.max(r1.y, r2.y));
+    }
+
+    intersects(a, b) {
+        return (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y);
     }
 }
-
 module.exports = new AIRequestManager();

@@ -1,0 +1,16 @@
+{
+    "mode": "manual",
+    "ip": "192.168.120.208",
+    "netmask": "255.255.255.0",
+    "gateway": "192.168.120.254",
+    "dns1": "127.0.0.53",
+    "dns2": "8.8.4.4",
+    "ipv4": "192.168.120.50",
+    "dns": "8.8.8.8",
+    "ipv6_enabled": false,
+    "ipv6": "fe80::1",
+    "vpn_enabled": false,
+    "dispatchUrl": "http://194.107.163.227:8091",
+    "edgeName": "DSS-DELL",
+    "interface": "enp0s31f6"
+}

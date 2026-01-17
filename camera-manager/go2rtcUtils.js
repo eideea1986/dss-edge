@@ -22,21 +22,30 @@ streams:
     cameras.forEach(cam => {
         if (cam.enabled === false) return;
 
-        const hdUrl = (cam.rtspHd || cam.rtspMain || cam.rtsp || "").split('#')[0].trim();
-        const subUrl = (cam.rtspSub || cam.rtsp || "").split('#')[0].trim();
+        // FORCE TCP TRANSPORT & DISABLE AUDIO BACKCHANNEL
+        // This makes the connection stable like the Recorder, fixing UDP packet loss stutter.
+        // Support both old and new config formats
+        const hdUrlRaw = (cam.rtspHd || cam.rtspMain || (cam.streams && cam.streams.main) || cam.rtsp || "").trim();
+        const subUrlRaw = (cam.rtspSub || (cam.streams && cam.streams.sub) || cam.rtsp || "").trim();
 
-        if (hdUrl) {
+        if (hdUrlRaw) {
+            // Append suffixes if not present. backchannel=0 prevents audio blocking video. tcp forces interleave.
+            const suffix = "#backchannel=0#tcp";
+            const hdUrl = hdUrlRaw.includes('#') ? hdUrlRaw + suffix : hdUrlRaw + suffix;
             yaml += `  ${cam.id}_hd: ${hdUrl}\n`;
-        }
-        if (subUrl) {
-            yaml += `  ${cam.id}_sub: ${subUrl}\n`;
+            // Also map main ID to HD stream
+            yaml += `  ${cam.id}: ${hdUrl}\n`;
         }
 
-        // Use direct URL for the main ID as well to avoid alias issues
-        if (subUrl) {
-            yaml += `  ${cam.id}: ${subUrl}\n`;
-        } else if (hdUrl) {
-            yaml += `  ${cam.id}: ${hdUrl}\n`;
+        if (subUrlRaw) {
+            const suffix = "#backchannel=0#tcp";
+            const subUrl = subUrlRaw.includes('#') ? subUrlRaw + suffix : subUrlRaw + suffix;
+            yaml += `  ${cam.id}_sub: ${subUrl}\n`;
+
+            // If HD is missing, fallback main ID to sub
+            if (!hdUrlRaw) {
+                yaml += `  ${cam.id}: ${subUrl}\n`;
+            }
         }
     });
 

@@ -43,17 +43,16 @@ app.sendPlaybackTelemetry = (camId, absTs) => {
 };
 
 // --- PROXY DEFINITIONS ---
-const streamProxy = httpProxy.createProxyServer({ target: "http://127.0.0.1:8554", ws: true });
-const rtcProxy = httpProxy.createProxyServer({ target: "http://127.0.0.1:8085", ws: true });
+// --- PROXY DEFINITIONS ---
+const rtcProxy = httpProxy.createProxyServer({ target: "http://127.0.0.1:1984", ws: true });
+const streamProxy = httpProxy.createProxyServer({ target: "http://127.0.0.1:5002" });
 
 // Error Handling for Proxies
 streamProxy.on('error', (err, req, res) => {
-    // console.warn("[StreamProxy] Error:", err.message);
     if (res && !res.headersSent) res.writeHead(502).end();
 });
 
 rtcProxy.on('error', (err, req, res) => {
-    // console.warn("[RTCProxy] Error:", err.message);
     if (res && !res.headersSent) res.writeHead(502).end();
 });
 
@@ -96,6 +95,11 @@ app.get("/api/system/health", async (req, res) => {
         res.json({
             system: globalState,
             modules: health,
+            disk: await redis.get("hb:disk_usage") || 0,
+            vpn: {
+                dispatch: (await redis.get("state:vpn:wg0")) === "UP" ? "OK" : "FAIL",
+                ai: (await redis.get("state:vpn:wg1")) === "UP" ? "OK" : "FAIL"
+            },
             streams: liveState ? JSON.parse(liveState) : []
         });
     } catch (e) {
@@ -152,9 +156,7 @@ app.get("/reload-status", (req, res) => {
     res.json({ success: true, message: "Status reloaded from disk" });
 });
 
-// Proxy Configuration
-const rtcProxy = httpProxy.createProxyServer({ target: 'http://127.0.0.1:1984', ws: true });
-const streamProxy = httpProxy.createProxyServer({ target: 'http://127.0.0.1:5002' });
+// Proxy Configuration (Moved to top)
 
 
 // Global Request Logger

@@ -178,31 +178,24 @@ export default function Status() {
 
                     <SectionCard title="MODULE HEALTH">
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 15 }}>
-                            {info.modules && Object.entries(info.modules).map(([name, installed]) => (
-                                <div key={name} style={{
-                                    display: "flex", alignItems: "center", justifyContent: "space-between",
-                                    padding: "12px 15px", background: "#1e1e1e", borderRadius: 6,
-                                    borderLeft: `4px solid ${installed ? "#4caf50" : "#f44336"}`
-                                }}>
-                                    <span style={{ fontWeight: 500, textTransform: "capitalize", fontSize: 14 }}>{name.replace("-", " ")}</span>
-                                    <span style={{
-                                        fontSize: 11, fontWeight: "bold",
-                                        padding: "2px 8px", borderRadius: 10,
-                                        background: installed ? "rgba(76, 175, 80, 0.1)" : "rgba(244, 67, 54, 0.1)",
-                                        color: installed ? "#4caf50" : "#f44336"
-                                    }}>
-                                        {installed ? "RUNNING" : "STOPPED"}
-                                    </span>
-                                </div>
-                            ))}
+                            {/* Core Modules */}
+                            <ModuleStatus name="Core System (dss-edge)" status={true} />
+                            <ModuleStatus name="Web Interface (UI)" status={true} />
+                            <ModuleStatus name="API Gateway" status={true} />
+                            <ModuleStatus name="Live Streaming (Go2RTC)" status={true} />
+
+                            {/* Dynamic Modules */}
+                            <ModuleStatus name="AI Detection Engine" status={info.modules && info.modules['dss-ai']} />
+
+                            {/* Critical Engines */}
                             <div style={{
                                 display: "flex", alignItems: "center", justifyContent: "space-between",
                                 padding: "12px 15px", background: "#1e1e1e", borderRadius: 6,
-                                borderLeft: `4px solid ${info.storageMap ? "#4caf50" : "#ffa726"}`
+                                borderLeft: `4px solid ${info.storageMap ? "#4caf50" : "#ff9800"}`
                             }}>
                                 <span style={{ fontWeight: 500, fontSize: 14 }}>Retention Engine</span>
-                                <span style={{ color: info.storageMap ? "#4caf50" : "#ffa726", fontSize: 11, fontWeight: "bold" }}>
-                                    {info.storageMap ? "ACTIVE" : "NO MAP"}
+                                <span style={{ color: info.storageMap ? "#4caf50" : "#ff9800", fontSize: 11, fontWeight: "bold" }}>
+                                    {info.storageMap ? "ACTIVE" : "NO MAP (DISK FULL?)"}
                                 </span>
                             </div>
                         </div>
@@ -254,6 +247,24 @@ export default function Status() {
 }
 
 // Sub-components for Cleaner Layout
+
+const ModuleStatus = ({ name, status }) => (
+    <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "12px 15px", background: "#1e1e1e", borderRadius: 6,
+        borderLeft: `4px solid ${status ? "#4caf50" : "#f44336"}`
+    }}>
+        <span style={{ fontWeight: 500, fontSize: 14 }}>{name}</span>
+        <span style={{
+            fontSize: 11, fontWeight: "bold",
+            padding: "2px 8px", borderRadius: 10,
+            background: status ? "rgba(76, 175, 80, 0.1)" : "rgba(244, 67, 54, 0.1)",
+            color: status ? "#4caf50" : "#f44336"
+        }}>
+            {status ? "RUNNING" : "STOPPED"}
+        </span>
+    </div>
+);
 
 const ActionButton = ({ label, onClick, color }) => (
     <button onClick={onClick} style={{

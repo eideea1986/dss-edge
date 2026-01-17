@@ -48,8 +48,20 @@ class DeviceManager {
         let yaml = "streams:\n";
         cameras.forEach(cam => {
             if (cam.enabled !== false) {
-                yaml += `  ${cam.id}_low: \n    - "${cam.rtsp || ""}"\n`;
-                yaml += `  ${cam.id}_hd: \n    - "${cam.rtspMain || cam.rtsp || ""}"\n`;
+                const hd = (cam.rtspMain || (cam.streams && cam.streams.main) || cam.rtsp || "").trim();
+                const sub = (cam.rtsp || (cam.streams && cam.streams.sub) || "").trim();
+
+                const suffix = "#backchannel=0#tcp";
+
+                if (hd) {
+                    yaml += `  ${cam.id}_hd: "${hd}${suffix}"\n`;
+                    yaml += `  ${cam.id}: "${hd}${suffix}"\n`;
+                }
+                if (sub) {
+                    yaml += `  ${cam.id}_low: "${sub}${suffix}"\n`;
+                    yaml += `  ${cam.id}_sub: "${sub}${suffix}"\n`;
+                    if (!hd) yaml += `  ${cam.id}: "${sub}${suffix}"\n`;
+                }
             }
         });
         try {

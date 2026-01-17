@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const cameraStore = require('../local-api/store/cameraStore');
 
+const aiRouter = require('../local-api/services/aiRequest');
+
 const RAMDISK_DIR = path.resolve(__dirname, '../recorder/ramdisk/snapshots');
 const GO2RTC_API = 'http://127.0.0.1:1984/api/frame.jpeg';
 
@@ -14,7 +16,7 @@ class DecoderManager {
 
     startAll() {
         if (!fs.existsSync(RAMDISK_DIR)) fs.mkdirSync(RAMDISK_DIR, { recursive: true });
-        console.log("[Decoder] Initializing optimized polling...");
+        console.log("[Decoder] Initializing optimized polling (Continuous AI)...");
         cameraStore.list().forEach(cam => this.startDecoder(cam));
     }
 
@@ -25,7 +27,7 @@ class DecoderManager {
 
         // Poll immediately then interval
         this.pollSnapshot(cam);
-        const timer = setInterval(() => this.pollSnapshot(cam), 5000); // 5 seconds interval
+        const timer = setInterval(() => this.pollSnapshot(cam), 1000); // 1000ms (1 FPS Analysis)
         this.timers.set(cam.id, timer);
     }
 
@@ -43,7 +45,18 @@ class DecoderManager {
                 res.on('end', () => {
                     const params = Buffer.concat(chunks);
                     const snapPath = path.join(RAMDISK_DIR, `${cam.id}.jpg`);
-                    fs.writeFile(snapPath, params, () => { });
+
+                    // Write file
+                    if (params.length > 0) {
+                        fs.writeFile(snapPath, params, () => {
+                            // Trigger AI Analysis only for valid snapshots
+                            try {
+                                aiRouter.handleMotion(cam.id).catch(err => { });
+                            } catch (e) { }
+                        });
+                    } else {
+                        // console.debug(`[Decoder] Zero bytes received for ${cam.id}`);
+                    }
                 });
             } else {
                 // Consume data to free memory

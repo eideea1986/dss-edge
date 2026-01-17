@@ -60,10 +60,11 @@ class Recorder {
             '-c', 'copy',
             '-map', '0',
             '-f', 'segment',
-            '-segment_time', '10', // 10s segments
+            '-segment_time', '60', // TRASSIR Standard: 60s
             '-segment_format', 'mp4',
             '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
             '-reset_timestamps', '1',
+            '-segment_atclocktime', '1', // Strict alignment
             '-strftime', '1',
             outputPattern
         ];
@@ -76,8 +77,8 @@ class Recorder {
 
             proc.stderr.on('data', (data) => {
                 const line = data.toString();
-                // We rely on file system sync for indexing now, logging strictly for debug if needed
-                if (line.includes('Error') || line.includes('error')) {
+                // Log critical errors only
+                if (line.includes('Error') && !line.includes('non-monoton')) {
                     // console.warn(`[Recorder:${camera.id}] ${line.trim()}`);
                 }
             });
@@ -117,18 +118,27 @@ class Recorder {
             const files = fs.readdirSync(camDir).filter(f => f.endsWith('.mp4'));
 
             for (const file of files) {
+                const filePath = path.join(camDir, file);
+
+                // VALIDATION: Ignore incomplete/small segments (<200KB)
+                try {
+                    const stats = fs.statSync(filePath);
+                    if (stats.size < 204800) continue; // Skip files < 200KB
+                } catch (e) { continue; }
+
                 // Parse timestamp from filename: HH-MM-SS.mp4 (Front-end format)
                 const match = file.match(/(\d{2})-(\d{2})-(\d{2})\.mp4/);
                 if (match) {
                     const [_, h, min, s] = match;
                     const now = new Date();
-                    // Construct date from today's components + filename time
+                    // Note: This relies on camDir being today's folder. 
+                    // Verify if previous day's recording?
+                    // We assume sync is near-realtime.
                     const date = new Date(now.getFullYear(), now.getMonth(), now.getDate(), parseInt(h), parseInt(min), parseInt(s));
 
                     const startTs = Math.floor(date.getTime() / 1000);
-                    const duration = 10;
+                    const duration = 60; // Fixed 60s duration (TRASSIR Standard)
                     const endTs = startTs + duration;
-                    const filePath = path.join(camDir, file);
 
                     try {
                         await db.addSegment(camId, startTs, endTs, duration, filePath, 'continuous');

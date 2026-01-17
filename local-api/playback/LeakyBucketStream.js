@@ -1,76 +1,42 @@
 const { Transform } = require('stream');
 
+/**
+ * LeakyBucketStream
+ * 
+ * Provides a "Burst" of data at the start to fill the browser's video buffer,
+ * then maintains a steady flow.
+ */
 class LeakyBucketStream extends Transform {
-    constructor(targetBitrate) {
-        super();
-        this.targetBytesPerSecond = targetBitrate / 8;
-        this.updateInterval = 20; // ms
-        this.bytesPerInterval = this.targetBytesPerSecond * (this.updateInterval / 1000);
+    constructor(options = {}) {
+        super(options);
+        // Default burst: 15MB (approx 1 minute of video)
+        this.burstThreshold = options.burstThreshold || 15 * 1024 * 1024;
+        this.bytesSent = 0;
+        this.isBursting = true;
+        this.startTime = Date.now();
 
-        this.internalBuffer = Buffer.alloc(0);
-        this.timer = null;
-        this.isFlowing = false;
-
-        // Max buffer before we start dropping or speeding up significantly
-        this.maxBufferParams = this.targetBytesPerSecond * 5; // 5 seconds
+        console.log(`[LeakyBucket] Initialized with ${this.burstThreshold / 1024 / 1024}MB burst threshold.`);
     }
 
     _transform(chunk, encoding, callback) {
-        this.internalBuffer = Buffer.concat([this.internalBuffer, chunk]);
+        this.bytesSent += chunk.length;
 
-        if (!this.isFlowing && this.internalBuffer.length > this.bytesPerInterval * 10) {
-            this.startFlow();
+        if (this.isBursting && this.bytesSent > this.burstThreshold) {
+            this.isBursting = false;
+            const elapsed = (Date.now() - this.startTime) / 1000;
+            console.log(`[LeakyBucket] Burst complete: ${(this.bytesSent / 1024 / 1024).toFixed(2)} MB sent in ${elapsed.toFixed(2)}s. Switching to normal flow.`);
         }
 
-        // Handle Backpressure from source (FFmpeg) - unlikely needed with ultrafast, but good practice
-        if (this.internalBuffer.length > this.maxBufferParams) {
-            // Too much data built up? Speed up output temporarily
-            this.bytesPerInterval *= 1.05;
-        }
+        // We don't actually "throttle" yet (delay the callback), 
+        // because we want FFmpeg to work as fast as the OS allows.
+        // Standard piping handles the "leaky" part (back-pressure from the network).
 
-        callback();
-    }
-
-    startFlow() {
-        this.isFlowing = true;
-        this.timer = setInterval(() => {
-            this.tick();
-        }, this.updateInterval);
-    }
-
-    tick() {
-        if (this.internalBuffer.length === 0) return;
-
-        // Dynamic adjustment used to keep buffer around 1-2 seconds
-        // If buffer < 1s, exact rate. If buffer > 2s, 1.1x rate.
-        let currentRate = this.bytesPerInterval;
-        if (this.internalBuffer.length > this.targetBytesPerSecond * 2) {
-            currentRate *= 1.2;
-        } else if (this.internalBuffer.length > this.targetBytesPerSecond) {
-            currentRate *= 1.1;
-        }
-
-        const chunkSize = Math.floor(currentRate);
-        const toSend = Math.min(chunkSize, this.internalBuffer.length);
-
-        const chunk = this.internalBuffer.slice(0, toSend);
-        this.internalBuffer = this.internalBuffer.slice(toSend);
+        // This stream primarily serves as a monitor and ensures we don't accidentally
+        // block the initial burst if we ever add throttling.
 
         this.push(chunk);
-    }
-
-    _flush(callback) {
-        if (this.timer) clearInterval(this.timer);
-        if (this.internalBuffer.length > 0) {
-            this.push(this.internalBuffer);
-        }
         callback();
-    }
-
-    destroy(err) {
-        if (this.timer) clearInterval(this.timer);
-        super.destroy(err);
     }
 }
 
-module.exports = { LeakyBucketStream };
+module.exports = LeakyBucketStream;
