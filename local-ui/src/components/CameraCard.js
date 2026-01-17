@@ -1,8 +1,9 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { colors } from "../theme";
-import Go2RTCPlayer from "./Go2RTCPlayer"; // For Low Latency Grid View
+import DualStreamPlayer from "./DualStreamPlayer"; // Dual Stream for Instant Fullscreen Switch
 import RecorderPlayer from "./RecorderPlayer"; // For High Quality Playback View
+import MSEPlayer from "./MSEPlayer"; // For Robust Live Fullscreen (TCP)
 import { Maximize, Minimize, Circle, Activity, Archive, Shield, Lock, SettingsIcon as Settings, Video } from "./Icons";
 
 // --- STYLES ---
@@ -33,13 +34,11 @@ const iconBtnStyle = {
 };
 
 // --- ZONE OVERLAY COMPONENT ---
-// Renders normalized zones (0-1) scaled to current container size.
 function ZoneOverlay({ cam }) {
     const containerRef = React.useRef(null);
     const canvasRef = React.useRef(null);
     const [dims, setDims] = useState({ w: 0, h: 0 });
 
-    // 1. Measure Container Size (Robust)
     React.useEffect(() => {
         const obs = new ResizeObserver(entries => {
             for (const entry of entries) {
@@ -51,7 +50,6 @@ function ZoneOverlay({ cam }) {
         return () => obs.disconnect();
     }, []);
 
-    // 2. Draw Zones
     React.useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas || dims.w === 0) return;
@@ -59,9 +57,7 @@ function ZoneOverlay({ cam }) {
 
         ctx.clearRect(0, 0, dims.w, dims.h);
 
-        // Get Zones
         const zones = cam.ai_server?.zones || [];
-        // Legacy ROI support
         if (zones.length === 0 && cam.ai_server?.roi) {
             zones.push({ points: cam.ai_server.roi });
         }
@@ -69,7 +65,6 @@ function ZoneOverlay({ cam }) {
         const drawZone = (pts) => {
             if (!pts || pts.length === 0) return;
             ctx.beginPath();
-            // Logic: If point > 1 it's pixel (old), if <= 1 it's % (new).
             const x0 = pts[0][0] > 1 ? pts[0][0] : pts[0][0] * dims.w;
             const y0 = pts[0][1] > 1 ? pts[0][1] : pts[0][1] * dims.h;
 
@@ -101,23 +96,19 @@ function ZoneOverlay({ cam }) {
                 ref={canvasRef}
                 width={dims.w}
                 height={dims.h}
-                style={{ width: '100%', height: '100%', display: 'block' }}
+                style={{ width: '100%', height: '100%', display: 'block', background: 'transparent' }}
             />
         </div>
     );
 }
 
 // --- COMPONENT ---
-export default function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed, health }) {
+function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed, health }) {
     const navigate = useNavigate();
     const [hover, setHover] = useState(false);
     const [quality, setQuality] = useState('hd');
     const [contextMenu, setContextMenu] = useState(null);
 
-    // Derived states
-    const effectiveStreamType = isMaximized ? 'hd' : (quality === 'hd' ? 'hd' : 'low');
-
-    // Handle Closing Context Menu
     React.useEffect(() => {
         const h = () => setContextMenu(null);
         window.addEventListener('click', h);
@@ -134,20 +125,9 @@ export default function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMax
         onMaximise(cam);
     };
 
-    const handleRecToggle = (e) => {
-        e.stopPropagation();
-        const newMode = cam.recordingMode === 'motion' ? 'continuous' : 'motion';
-        onUpdate(cam.id, { recordingMode: newMode });
-    };
-
     const handlePlayback = (e) => {
         e.stopPropagation();
         navigate(`/playback?camId=${cam.id}`);
-    };
-
-    const handleQualityToggle = (e) => {
-        e.stopPropagation();
-        setQuality(prev => prev === 'hd' ? 'low' : 'hd');
     };
 
     const isRecording = cam.record !== false;
@@ -186,31 +166,21 @@ export default function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMax
                 </div>
             )}
 
-            {/* VIDEO AREA */}
+            {/* VIDEO AREA - DUAL STREAM (Instant Switch) */}
             <div style={{ flex: 1, position: "relative", background: "#000", cursor: "pointer", width: "100%" }}
                 onClick={() => !isMaximized && onMaximise(cam)}
             >
-                {isMaximized ? (
-                    <RecorderPlayer
-                        camId={cam.id}
-                        streamType="hd"
-                        isHidden={isHidden}
-                        style={{ width: "100%", height: "100%" }}
-                    />
-                ) : (
-                    <Go2RTCPlayer
-                        camId={cam.id}
-                        streamType="low"
-                        isHidden={isHidden}
-                        style={{ width: "100%", height: "100%" }}
-                        onDoubleClick={() => onMaximise(cam)}
-                    />
-                )}
+                <DualStreamPlayer
+                    camId={cam.id}
+                    isFullscreen={isMaximized}
+                    isHidden={isHidden}
+                    style={{ width: "100%", height: "100%" }}
+                />
 
-                {/* ZONE OVERLAY (Visible if Armed) */}
+                {/* ZONE OVERLAY */}
                 {isArmed && <ZoneOverlay cam={cam} />}
 
-                {/* OVERLAYS (Only visible on hover or maximized) */}
+                {/* OVERLAYS */}
                 <div style={{
                     position: "absolute", bottom: 0, left: 0, right: 0,
                     padding: 8,
@@ -234,7 +204,7 @@ export default function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMax
                 </div>
             </div>
 
-            {/* HEADER / STATUS BAR (UNIFIED) */}
+            {/* HEADER / STATUS BAR */}
             <div style={{
                 height: 32, background: isArmed ? "rgba(0, 230, 118, 0.1)" : "#111",
                 borderTop: "1px solid #333",
@@ -247,7 +217,6 @@ export default function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMax
                         boxShadow: isOnline ? "0 0 8px #00e676" : "none"
                     }} />
 
-                    {/* ARMING ICON (The Shield) - Clearly visible now */}
                     <div title={isArmed ? "Armed (AI ON)" : "Disarmed (AI OFF)"}>
                         <Shield size={16} color={isArmed ? "#00e676" : "#555"} fill={isArmed ? "rgba(0,230,118,0.2)" : "none"} />
                     </div>
@@ -267,7 +236,7 @@ export default function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMax
                 </div>
 
                 <div style={{ fontSize: 9, color: "#444", fontWeight: "bold", letterSpacing: 0.5 }}>
-                    {isMaximized ? "REC STREAM" : "RTC STREAM"}
+                    {isMaximized ? "MAIN STREAM" : "SUB STREAM"}
                 </div>
             </div>
 
@@ -281,3 +250,5 @@ export default function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMax
         </div>
     );
 }
+
+export default React.memo(CameraCard);
