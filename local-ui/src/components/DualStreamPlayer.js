@@ -217,7 +217,8 @@ export default function SmartDualStreamPlayer({ camId, isFullscreen, isHidden, i
             {/* STATIC POSTER (Zero Latency UX) */}
             {posterUrl && (
                 <img
-                    src={posterUrl + `?_=${Date.now()}`} // Bust cache slightly or ensure latest
+                    src={posterUrl}
+                    loading="eager"
                     style={{
                         position: "absolute",
                         top: 0,
