@@ -6,9 +6,9 @@ import React, { useEffect, useRef } from "react";
 const streamPool = new Map();
 
 /**
- * CONFIG FIX: WebRTC signaling is on the API port (8085)
+ * CONFIG FIX: Use the unified /rtc proxy on the main API port
  */
-const GO2RTC_API = `http://${window.location.hostname}:1984`;
+const GO2RTC_API = `${window.location.origin}/rtc`;
 
 async function acquireStream(camId, type = "sub") {
     const key = `${camId}_${type}`;
