@@ -22,6 +22,34 @@ function log(msg) {
 let loadedCameras = [];
 let decoders = new Map(); // camId -> Process (Snapshot)
 let recorders = new Map(); // camId -> Process (Continuous Recording)
+let cachedStreams = { data: {}, timestamp: 0 };
+
+/**
+ * Helper to check if a stream is actually available in Go2RTC
+ * Prevents 404 Crash Loops
+ */
+function checkStreamAvailability(streamName, callback) {
+    const now = Date.now();
+    // Cache for 2 seconds to reduce API load
+    if (now - cachedStreams.timestamp < 2000) {
+        return callback(!!cachedStreams.data[streamName]);
+    }
+
+    exec("curl -s http://127.0.0.1:1984/api/streams", (err, stdout) => {
+        if (err || !stdout) {
+            callback(false);
+            return;
+        }
+        try {
+            const data = JSON.parse(stdout);
+            cachedStreams.data = data;
+            cachedStreams.timestamp = now;
+            callback(!!data[streamName]);
+        } catch (e) {
+            callback(false);
+        }
+    });
+}
 
 /**
  * 1. GENERATE GO2RTC CONFIG
@@ -39,14 +67,17 @@ function generateGo2RTC() {
 
             // Logic: Root ID = Best Quality Available
             let hasMain = false;
-            if (cam.streams?.main) {
-                streams[`${cam.id}_hd`] = cam.streams.main;
-                streams[cam.id] = cam.streams.main; // Default to HD
+            const mainUrl = cam.rtspMain || cam.streams?.main;
+            const subUrl = cam.rtspSub || cam.streams?.sub;
+
+            if (mainUrl) {
+                streams[`${cam.id}_hd`] = mainUrl;
+                streams[cam.id] = mainUrl; // Default to HD
                 hasMain = true;
             }
-            if (cam.streams?.sub) {
-                streams[`${cam.id}_sub`] = cam.streams.sub;
-                if (!hasMain) streams[cam.id] = cam.streams.sub; // Fallback to SD
+            if (subUrl) {
+                streams[`${cam.id}_sub`] = subUrl;
+                if (!hasMain) streams[cam.id] = subUrl; // Fallback to SD
             }
         });
 
@@ -107,37 +138,47 @@ function updateProcesses() {
         // Start missing decoders (Software fallback active)
         loadedCameras.forEach(cam => {
             if (cam.enabled === false || decoders.has(cam.id)) return;
-            if (!cam.streams?.main && !cam.streams?.sub) return;
+            const mainUrl = cam.rtspMain || cam.streams?.main;
+            const subUrl = cam.rtspSub || cam.streams?.sub;
+            if (!mainUrl && !subUrl) return;
 
             let streamSuffix = "";
-            if (cam.streams && cam.streams.sub) streamSuffix = "_sub";
+            if (subUrl) streamSuffix = "_sub";
             const rtspUrl = `rtsp://127.0.0.1:8554/${cam.id}${streamSuffix}`;
-            log(`Starting Snapshot Decoder for ${cam.id}...`);
+            // Verify stream exists in Go2RTC first to avoid 404 crash loop
+            checkStreamAvailability(`${cam.id}${streamSuffix}`, (isAvailable) => {
+                if (!isAvailable) {
+                    // log(`Skipping Decoder for ${cam.id} - Stream not available in Go2RTC`);
+                    return;
+                }
 
-            const args = [
-                '-hide_banner', '-y', '-loglevel', 'error',
-                '-skip_frame', 'nokey',
-                '-rtsp_transport', 'tcp',
-                '-i', rtspUrl,
-                '-threads', '1',
-                '-vf', 'fps=0.2,scale=640:360',
-                '-update', '1',
-                path.join(SNAPSHOT_DIR, `${cam.id}.jpg`)
-            ];
+                log(`Starting Snapshot Decoder for ${cam.id}...`);
 
-            const p = spawn('nice', ['-n', '19', 'ffmpeg', ...args]);
+                const args = [
+                    '-hide_banner', '-y', '-loglevel', 'error',
+                    '-skip_frame', 'nokey',
+                    '-rtsp_transport', 'tcp',
+                    '-i', rtspUrl,
+                    '-threads', '1',
+                    '-vf', 'fps=0.2,scale=640:360',
+                    '-update', '1',
+                    path.join(SNAPSHOT_DIR, `${cam.id}.jpg`)
+                ];
 
-            let stderrLog = "";
-            p.stderr.on('data', (d) => {
-                stderrLog += d.toString();
-                if (stderrLog.length > 500) stderrLog = stderrLog.slice(-500);
+                const p = spawn('nice', ['-n', '19', 'ffmpeg', ...args]);
+
+                let stderrLog = "";
+                p.stderr.on('data', (d) => {
+                    stderrLog += d.toString();
+                    if (stderrLog.length > 500) stderrLog = stderrLog.slice(-500);
+                });
+
+                p.on('exit', (code) => {
+                    if (code !== 0 && code !== 255) log(`Decoder ${cam.id} CRASHED (code ${code}). Stderr: ${stderrLog.slice(-100)}`);
+                    decoders.delete(cam.id);
+                });
+                decoders.set(cam.id, p);
             });
-
-            p.on('exit', (code) => {
-                if (code !== 0 && code !== 255) log(`Decoder ${cam.id} CRASHED (code ${code}). Stderr: ${stderrLog.slice(-100)}`);
-                decoders.delete(cam.id);
-            });
-            decoders.set(cam.id, p);
         });
 
         // --- CONTINUOUS RECORDERS ---
@@ -155,45 +196,53 @@ function updateProcesses() {
             if (blockRecording && !cam.ai) return;
             if (onlyAI && !cam.ai) return;
             if (recorders.has(cam.id)) return;
-            if (!cam.streams?.main && !cam.streams?.sub) return;
+            const mainUrl = cam.rtspMain || cam.streams?.main;
+            const subUrl = cam.rtspSub || cam.streams?.sub;
+            if (!mainUrl && !subUrl) return;
 
-            const rtspUrl = `rtsp://127.0.0.1:8554/${cam.id}`;
-            log(`Starting Recorder for ${cam.id}...`);
+            const rtspUrl = `rtsp://127.0.0.1:8554/${cam.id}`; // Default to Best Quality (Main if available)
 
-            const now = new Date();
-            const y = now.getFullYear();
-            const m = String(now.getMonth() + 1).padStart(2, '0');
-            const d = String(now.getDate()).padStart(2, '0');
+            // Verify stream exists in Go2RTC first
+            checkStreamAvailability(cam.id, (isAvailable) => {
+                if (!isAvailable) return;
 
-            const dayDir = path.join(ROOT_DIR, 'storage', cam.id, String(y), m, d);
-            if (!fs.existsSync(dayDir)) fs.mkdirSync(dayDir, { recursive: true });
+                log(`Starting Recorder for ${cam.id}...`);
 
-            const args = [
-                '-hide_banner', '-y', '-loglevel', 'error',
-                '-rtsp_transport', 'tcp',
-                '-i', rtspUrl,
-                '-map', '0', '-c', 'copy',
-                '-f', 'segment',
-                '-segment_time', '60',
-                '-strftime', '1',
-                '-reset_timestamps', '1',
-                path.join(dayDir, '%H-%M-%S.mp4')
-            ];
+                const now = new Date();
+                const y = now.getFullYear();
+                const m = String(now.getMonth() + 1).padStart(2, '0');
+                const d = String(now.getDate()).padStart(2, '0');
 
-            const p = spawn('ffmpeg', args);
+                const dayDir = path.join(ROOT_DIR, 'storage', cam.id, String(y), m, d);
+                if (!fs.existsSync(dayDir)) fs.mkdirSync(dayDir, { recursive: true });
 
-            let stderrLog = "";
-            p.stderr.on('data', (d) => {
-                stderrLog += d.toString();
-                if (stderrLog.length > 500) stderrLog = stderrLog.slice(-500);
+                const args = [
+                    '-hide_banner', '-y', '-loglevel', 'error',
+                    '-rtsp_transport', 'tcp',
+                    '-i', rtspUrl,
+                    '-map', '0', '-c', 'copy',
+                    '-f', 'segment',
+                    '-segment_time', '60',
+                    '-strftime', '1',
+                    '-reset_timestamps', '1',
+                    path.join(dayDir, '%H-%M-%S.mp4')
+                ];
+
+                const p = spawn('ffmpeg', args);
+
+                let stderrLog = "";
+                p.stderr.on('data', (d) => {
+                    stderrLog += d.toString();
+                    if (stderrLog.length > 500) stderrLog = stderrLog.slice(-500);
+                });
+
+                p.on('exit', (code) => {
+                    if (code !== 0) log(`Recorder ${cam.id} CRASHED (code ${code}). Stderr: ${stderrLog}`);
+                    else log(`Recorder ${cam.id} exited cleanly.`);
+                    recorders.delete(cam.id);
+                });
+                recorders.set(cam.id, p);
             });
-
-            p.on('exit', (code) => {
-                if (code !== 0) log(`Recorder ${cam.id} CRASHED (code ${code}). Stderr: ${stderrLog}`);
-                else log(`Recorder ${cam.id} exited cleanly.`);
-                recorders.delete(cam.id);
-            });
-            recorders.set(cam.id, p);
         });
     });
 }
