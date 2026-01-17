@@ -43,6 +43,11 @@ app.sendPlaybackTelemetry = (camId, absTs) => {
 };
 
 // --- PROXY DEFINITIONS ---
+// --- SNAPSHOTS ---
+const SNAPSHOT_DIR = path.resolve(__dirname, "../recorder/ramdisk/snapshots");
+if (!fs.existsSync(SNAPSHOT_DIR)) fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+app.use("/snapshots", express.static(SNAPSHOT_DIR));
+
 // --- PROXY DEFINITIONS ---
 const rtcProxy = httpProxy.createProxyServer({ target: "http://127.0.0.1:1984", ws: true });
 const streamProxy = httpProxy.createProxyServer({ target: "http://127.0.0.1:5002" });

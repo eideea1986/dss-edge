@@ -175,6 +175,7 @@ function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed,
                     isFullscreen={isMaximized}
                     isHovered={hover}
                     isHidden={isHidden}
+                    posterUrl={`/snapshots/${cam.id}.jpg`}
                     style={{ width: "100%", height: "100%" }}
                 />
 

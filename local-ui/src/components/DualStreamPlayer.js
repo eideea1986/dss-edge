@@ -93,11 +93,24 @@ function releaseStream(camId, type = "sub") {
 /**
  * SMART DUAL STREAM PLAYER
  */
-export default function SmartDualStreamPlayer({ camId, isFullscreen, isHidden, isHovered, style }) {
+export default function SmartDualStreamPlayer({ camId, isFullscreen, isHidden, isHovered, posterUrl, style }) {
     const videoRef = useRef(null);
     const [subStream, setSubStream] = useState(null);
     const [mainStream, setMainStream] = useState(null);
     const [currentStream, setCurrentStream] = useState("sub");
+    const [posterVisible, setPosterVisible] = useState(true);
+
+    // Reset poster visibility when switching modes or cameras
+    useEffect(() => {
+        setPosterVisible(true);
+    }, [camId, isFullscreen]);
+
+    // Handle video play event to hide poster
+    const handleCanPlay = () => {
+        // Delay slighty to ensure frame is rendered
+        // setTimeout(() => setPosterVisible(false), 100);
+        setPosterVisible(false);
+    };
 
     // Always acquire substream
     useEffect(() => {
@@ -181,6 +194,9 @@ export default function SmartDualStreamPlayer({ camId, isFullscreen, isHidden, i
     useEffect(() => {
         if (!videoRef.current) return;
 
+        // Show poster briefly on switch
+        setPosterVisible(true);
+
         if (isFullscreen && mainStream) {
             // Switch to main
             console.log(`[SmartDual] Switching to MAIN for ${camId}`);
@@ -197,16 +213,41 @@ export default function SmartDualStreamPlayer({ camId, isFullscreen, isHidden, i
     }, [isFullscreen, subStream, mainStream, camId]);
 
     return (
-        <div style={{ ...style, position: "relative", background: "#000", width: "100%", height: "100%" }}>
+        <div style={{ ...style, position: "relative", background: "#000", width: "100%", height: "100%", overflow: "hidden" }}>
+            {/* STATIC POSTER (Zero Latency UX) */}
+            {posterUrl && (
+                <img
+                    src={posterUrl + `?_=${Date.now()}`} // Bust cache slightly or ensure latest
+                    style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "fill",
+                        zIndex: 10,
+                        opacity: posterVisible ? 1 : 0,
+                        transition: "opacity 150ms ease-out",
+                        pointerEvents: "none"
+                    }}
+                    onError={(e) => e.target.style.display = 'none'}
+                    alt=""
+                />
+            )}
+
             <video
                 ref={videoRef}
                 autoPlay
                 muted
                 playsInline
+                onPlaying={handleCanPlay}
                 style={{
                     width: "100%",
                     height: "100%",
-                    objectFit: "fill"
+                    objectFit: "fill",
+                    position: "absolute",
+                    top: 0,
+                    left: 0
                 }}
             />
             {/* Debug indicator */}
@@ -219,7 +260,8 @@ export default function SmartDualStreamPlayer({ camId, isFullscreen, isHidden, i
                     color: mainStream ? "#0f0" : "#ff0",
                     padding: "2px 6px",
                     fontSize: 10,
-                    fontFamily: "monospace"
+                    fontFamily: "monospace",
+                    zIndex: 20
                 }}>
                     {currentStream.toUpperCase()} {mainStream && !isFullscreen ? "(STANDBY)" : ""}
                 </div>
