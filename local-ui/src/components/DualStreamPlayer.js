@@ -1,0 +1,190 @@
+import React, { useEffect, useRef, useState } from "react";
+
+/**
+ * DUAL STREAM MANAGER - Trassir-like Instant Switch
+ * 
+ * FEATURES:
+ * - Grid: substream only (low bandwidth)
+ * - Fullscreen: main stream pre-connected in background
+ * - Switch: instant (<50ms) - no reconnection, no player recreation
+ * 
+ * ARCHITECTURE:
+ * - Both streams are acquired when component mounts
+ * - Substream is attached to video element in grid mode
+ * - Main stream runs in background (warm standby)
+ * - On fullscreen: instant switch to main stream
+ */
+
+const GO2RTC_API = `${window.location.origin}/rtc`;
+const streamPool = new Map();
+
+/**
+ * Acquire WebRTC stream (reuses existing connections)
+ */
+async function acquireStream(camId, type = "sub") {
+    const key = `${camId}_${type}`;
+
+    if (streamPool.has(key)) {
+        const entry = streamPool.get(key);
+        entry.refs++;
+        console.log(`[DualStream] Reusing ${key}, refs: ${entry.refs}`);
+        return entry;
+    }
+
+    console.log(`[DualStream] Creating WebRTC for ${key}`);
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    const media = new MediaStream();
+
+    pc.ontrack = (e) => {
+        console.log(`[DualStream] Track received for ${key}`);
+        media.addTrack(e.track);
+    };
+
+    pc.addTransceiver("video", { direction: "recvonly" });
+
+    try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        const res = await fetch(`${GO2RTC_API}/api/webrtc?src=${key}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/sdp" },
+            body: offer.sdp
+        });
+
+        if (!res.ok) {
+            throw new Error(`WebRTC failed: ${res.status}`);
+        }
+
+        const answer = await res.text();
+        await pc.setRemoteDescription({ type: "answer", sdp: answer });
+
+        const entry = { pc, media, refs: 1 };
+        streamPool.set(key, entry);
+        return entry;
+    } catch (err) {
+        pc.close();
+        throw err;
+    }
+}
+
+/**
+ * Release stream (with grace period)
+ */
+function releaseStream(camId, type = "sub") {
+    const key = `${camId}_${type}`;
+    const entry = streamPool.get(key);
+    if (!entry) return;
+
+    entry.refs--;
+    console.log(`[DualStream] Released ${key}, refs: ${entry.refs}`);
+
+    if (entry.refs <= 0) {
+        setTimeout(() => {
+            const currentEntry = streamPool.get(key);
+            if (currentEntry && currentEntry.refs <= 0) {
+                console.log(`[DualStream] Closing idle ${key}`);
+                currentEntry.pc.close();
+                streamPool.delete(key);
+            }
+        }, 15000); // 15s grace period
+    }
+}
+
+/**
+ * DUAL STREAM PLAYER COMPONENT
+ */
+export default function DualStreamPlayer({ camId, isFullscreen, isHidden, style }) {
+    const videoRef = useRef(null);
+    const [subStream, setSubStream] = useState(null);
+    const [mainStream, setMainStream] = useState(null);
+    const [currentStream, setCurrentStream] = useState("sub");
+
+    // Acquire BOTH streams on mount
+    useEffect(() => {
+        if (isHidden || !camId) return;
+
+        let active = true;
+        let subEntry, mainEntry;
+
+        // CRITICAL: Acquire both streams simultaneously
+        Promise.all([
+            acquireStream(camId, "sub"),
+            acquireStream(camId, "hd")
+        ])
+            .then(([sub, main]) => {
+                if (!active) {
+                    releaseStream(camId, "sub");
+                    releaseStream(camId, "hd");
+                    return;
+                }
+                subEntry = sub;
+                mainEntry = main;
+                setSubStream(sub);
+                setMainStream(main);
+
+                // Start with substream (grid mode)
+                if (videoRef.current) {
+                    videoRef.current.srcObject = sub.media;
+                    videoRef.current.play().catch(() => { });
+                }
+            })
+            .catch((err) => {
+                console.error(`[DualStream] Error for ${camId}:`, err);
+            });
+
+        return () => {
+            active = false;
+            if (subEntry) releaseStream(camId, "sub");
+            if (mainEntry) releaseStream(camId, "hd");
+        };
+    }, [camId, isHidden]);
+
+    // INSTANT SWITCH on fullscreen change
+    useEffect(() => {
+        if (!subStream || !mainStream || !videoRef.current) return;
+
+        const targetStream = isFullscreen ? mainStream.media : subStream.media;
+        const targetName = isFullscreen ? "main" : "sub";
+
+        if (currentStream !== targetName) {
+            console.log(`[DualStream] Switching to ${targetName} for ${camId}`);
+
+            // CRITICAL: Direct srcObject reassignment (no recreation)
+            videoRef.current.srcObject = targetStream;
+            videoRef.current.play().catch(() => { });
+            setCurrentStream(targetName);
+        }
+    }, [isFullscreen, subStream, mainStream, currentStream, camId]);
+
+    return (
+        <div style={{ ...style, position: "relative", background: "#000", width: "100%", height: "100%" }}>
+            <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
+                style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "fill"
+                }}
+            />
+            {/* Debug indicator */}
+            {process.env.NODE_ENV === 'development' && (
+                <div style={{
+                    position: "absolute",
+                    top: 4,
+                    right: 4,
+                    background: "rgba(0,0,0,0.7)",
+                    color: "#0f0",
+                    padding: "2px 6px",
+                    fontSize: 10,
+                    fontFamily: "monospace"
+                }}>
+                    {currentStream.toUpperCase()}
+                </div>
+            )}
+        </div>
+    );
+}
