@@ -166,13 +166,14 @@ function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed,
                 </div>
             )}
 
-            {/* VIDEO AREA - DUAL STREAM (Instant Switch) */}
+            {/* VIDEO AREA - SMART DUAL STREAM */}
             <div style={{ flex: 1, position: "relative", background: "#000", cursor: "pointer", width: "100%" }}
                 onClick={() => !isMaximized && onMaximise(cam)}
             >
                 <DualStreamPlayer
                     camId={cam.id}
                     isFullscreen={isMaximized}
+                    isHovered={hover}
                     isHidden={isHidden}
                     style={{ width: "100%", height: "100%" }}
                 />

@@ -1,18 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
 
 /**
- * DUAL STREAM MANAGER - Trassir-like Instant Switch
- * 
- * FEATURES:
- * - Grid: substream only (low bandwidth)
- * - Fullscreen: main stream pre-connected in background
- * - Switch: instant (<50ms) - no reconnection, no player recreation
+ * SMART DUAL STREAM MANAGER - Trassir-like with Smart Warm Standby
  * 
  * ARCHITECTURE:
- * - Both streams are acquired when component mounts
- * - Substream is attached to video element in grid mode
- * - Main stream runs in background (warm standby)
- * - On fullscreen: instant switch to main stream
+ * - Grid: substream only (low CPU)
+ * - Hover: pre-connect main stream (warm standby)
+ * - Fullscreen: instant switch (main already connected)
+ * 
+ * CPU OPTIMIZATION:
+ * - Only 1 main stream in warm standby at a time
+ * - Grid idle: minimal overhead (25 substreams only)
+ * - Switch: <200ms (connection already established)
  */
 
 const GO2RTC_API = `${window.location.origin}/rtc`;
@@ -27,16 +26,16 @@ async function acquireStream(camId, type = "sub") {
     if (streamPool.has(key)) {
         const entry = streamPool.get(key);
         entry.refs++;
-        console.log(`[DualStream] Reusing ${key}, refs: ${entry.refs}`);
+        console.log(`[SmartDual] Reusing ${key}, refs: ${entry.refs}`);
         return entry;
     }
 
-    console.log(`[DualStream] Creating WebRTC for ${key}`);
+    console.log(`[SmartDual] Creating WebRTC for ${key}`);
     const pc = new RTCPeerConnection({ iceServers: [] });
     const media = new MediaStream();
 
     pc.ontrack = (e) => {
-        console.log(`[DualStream] Track received for ${key}`);
+        console.log(`[SmartDual] Track received for ${key}`);
         media.addTrack(e.track);
     };
 
@@ -77,37 +76,36 @@ function releaseStream(camId, type = "sub") {
     if (!entry) return;
 
     entry.refs--;
-    console.log(`[DualStream] Released ${key}, refs: ${entry.refs}`);
+    console.log(`[SmartDual] Released ${key}, refs: ${entry.refs}`);
 
     if (entry.refs <= 0) {
         setTimeout(() => {
             const currentEntry = streamPool.get(key);
             if (currentEntry && currentEntry.refs <= 0) {
-                console.log(`[DualStream] Closing idle ${key}`);
+                console.log(`[SmartDual] Closing idle ${key}`);
                 currentEntry.pc.close();
                 streamPool.delete(key);
             }
-        }, 15000); // 15s grace period
+        }, 5000); // 5s grace period (shorter for faster cleanup)
     }
 }
 
 /**
- * DUAL STREAM PLAYER COMPONENT
+ * SMART DUAL STREAM PLAYER
  */
-export default function DualStreamPlayer({ camId, isFullscreen, isHidden, style }) {
+export default function SmartDualStreamPlayer({ camId, isFullscreen, isHidden, isHovered, style }) {
     const videoRef = useRef(null);
     const [subStream, setSubStream] = useState(null);
     const [mainStream, setMainStream] = useState(null);
     const [currentStream, setCurrentStream] = useState("sub");
 
-    // Acquire SUBSTREAM on mount, MAIN STREAM only on fullscreen (lazy loading)
+    // Always acquire substream
     useEffect(() => {
         if (isHidden || !camId) return;
 
         let active = true;
         let subEntry;
 
-        // Always acquire substream
         acquireStream(camId, "sub")
             .then((sub) => {
                 if (!active) {
@@ -117,26 +115,28 @@ export default function DualStreamPlayer({ camId, isFullscreen, isHidden, style 
                 subEntry = sub;
                 setSubStream(sub);
 
-                // Start with substream (grid mode)
-                if (videoRef.current) {
+                // Attach substream to video if not fullscreen
+                if (videoRef.current && !isFullscreen) {
                     videoRef.current.srcObject = sub.media;
                     videoRef.current.play().catch(() => { });
                 }
             })
             .catch((err) => {
-                console.error(`[DualStream] Error for sub ${camId}:`, err);
+                console.error(`[SmartDual] Error for sub ${camId}:`, err);
             });
 
         return () => {
             active = false;
             if (subEntry) releaseStream(camId, "sub");
         };
-    }, [camId, isHidden]);
+    }, [camId, isHidden, isFullscreen]);
 
-    // Acquire MAIN STREAM only when fullscreen is activated
+    // SMART WARM STANDBY: Pre-connect main stream on HOVER or FULLSCREEN
     useEffect(() => {
-        if (!isFullscreen || isHidden || !camId) {
-            // Release main stream when leaving fullscreen
+        const shouldPreconnect = (isHovered || isFullscreen) && !isHidden && camId;
+
+        if (!shouldPreconnect) {
+            // Release main stream when not needed
             if (mainStream) {
                 releaseStream(camId, "hd");
                 setMainStream(null);
@@ -156,38 +156,42 @@ export default function DualStreamPlayer({ camId, isFullscreen, isHidden, style 
                 mainEntry = main;
                 setMainStream(main);
 
-                // Switch to main stream immediately
-                if (videoRef.current) {
+                // If fullscreen, attach immediately
+                if (isFullscreen && videoRef.current) {
                     videoRef.current.srcObject = main.media;
                     videoRef.current.play().catch(() => { });
+                    setCurrentStream("main");
                 }
+                // If just hovering, DON'T attach (warm standby)
             })
             .catch((err) => {
-                console.error(`[DualStream] Error for main ${camId}:`, err);
+                console.error(`[SmartDual] Error for main ${camId}:`, err);
             });
 
         return () => {
             active = false;
             if (mainEntry) releaseStream(camId, "hd");
         };
-    }, [isFullscreen, camId, isHidden]);
+    }, [isHovered, isFullscreen, camId, isHidden, mainStream]);
 
-    // INSTANT SWITCH on fullscreen change
+    // INSTANT SWITCH when fullscreen changes
     useEffect(() => {
-        if (!subStream || !mainStream || !videoRef.current) return;
+        if (!videoRef.current) return;
 
-        const targetStream = isFullscreen ? mainStream.media : subStream.media;
-        const targetName = isFullscreen ? "main" : "sub";
-
-        if (currentStream !== targetName) {
-            console.log(`[DualStream] Switching to ${targetName} for ${camId}`);
-
-            // CRITICAL: Direct srcObject reassignment (no recreation)
-            videoRef.current.srcObject = targetStream;
+        if (isFullscreen && mainStream) {
+            // Switch to main
+            console.log(`[SmartDual] Switching to MAIN for ${camId}`);
+            videoRef.current.srcObject = mainStream.media;
             videoRef.current.play().catch(() => { });
-            setCurrentStream(targetName);
+            setCurrentStream("main");
+        } else if (!isFullscreen && subStream) {
+            // Switch back to sub
+            console.log(`[SmartDual] Switching to SUB for ${camId}`);
+            videoRef.current.srcObject = subStream.media;
+            videoRef.current.play().catch(() => { });
+            setCurrentStream("sub");
         }
-    }, [isFullscreen, subStream, mainStream, currentStream, camId]);
+    }, [isFullscreen, subStream, mainStream, camId]);
 
     return (
         <div style={{ ...style, position: "relative", background: "#000", width: "100%", height: "100%" }}>
@@ -209,12 +213,12 @@ export default function DualStreamPlayer({ camId, isFullscreen, isHidden, style 
                     top: 4,
                     right: 4,
                     background: "rgba(0,0,0,0.7)",
-                    color: "#0f0",
+                    color: mainStream ? "#0f0" : "#ff0",
                     padding: "2px 6px",
                     fontSize: 10,
                     fontFamily: "monospace"
                 }}>
-                    {currentStream.toUpperCase()}
+                    {currentStream.toUpperCase()} {mainStream && !isFullscreen ? "(STANDBY)" : ""}
                 </div>
             )}
         </div>
