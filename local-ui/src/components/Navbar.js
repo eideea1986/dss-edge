@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { colors } from "../theme";
+import SystemStatus from "./SystemStatus";
 
 export default function Navbar() {
     let user = null;
@@ -27,9 +28,11 @@ export default function Navbar() {
                 DSS SmartGuard Edge <span style={{ fontSize: 10, color: colors.primary, marginLeft: 10 }}>v5.1.0 (Industrial Mode - Trassir Standard)</span>
             </div>
             <div style={{ display: "flex", alignItems: "center" }}>
-                <Link to="/" style={{ marginRight: 20, color: colors.text, textDecoration: "none" }}>Live</Link>
-                <Link to="/playback" style={{ marginRight: 20, color: colors.text, textDecoration: "none" }}>Arhivă</Link>
+                <Link to="/live" style={{ marginRight: 20, color: colors.text, textDecoration: "none", fontWeight: "bold" }}>Live</Link>
+                <Link to="/playback" style={{ marginRight: 20, color: colors.text, textDecoration: "none", fontWeight: "bold" }}>Arhivă</Link>
                 <Link to="/settings" style={{ marginRight: 20, color: colors.text, textDecoration: "none" }}>Setări</Link>
+
+                <SystemStatus />
 
 
                 {/* Username Display (Click to Logout) */}

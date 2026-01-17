@@ -1,60 +1,55 @@
-const { spawn } = require('child_process');
+const { spawn } = require("child_process");
 
-function spawnFFmpeg(concatFile, seekSeconds, speed = 1, format = 'mjpeg') {
-    const args = [
-        "-readrate", speed.toFixed(2),
-        "-f", "concat",
-        "-safe", "0",
-        "-i", concatFile,
-        "-ss", seekSeconds.toFixed(3)
+function createFfmpegArgs(listPath, offsetSec, durationSec = 90) {
+    return [
+        '-hide_banner', '-loglevel', 'error',
+
+        // Input settings
+        '-f', 'concat',
+        '-safe', '0',
+        '-ss', offsetSec.toFixed(3),
+        '-i', listPath,
+
+        // Stabilizare Timp (MSE Compatible)
+        '-copyts',
+        '-start_at_zero',
+        '-avoid_negative_ts', 'make_zero',
+
+        // Transcode settings (Optimized for quality & speed)
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-profile:v', 'baseline',
+        '-level', '3.1',
+        '-pix_fmt', 'yuv420p',
+        '-g', '60', // 2 seconds at 30fps
+
+        // Audio
+        '-c:a', 'aac', '-ac', '2', '-ar', '44100', '-b:a', '128k',
+
+        // Output format (Fragmented MP4 for streaming)
+        '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+        '-t', durationSec.toString(), // Stream limit to prevent "infinite" buffer logic issues
+        '-f', 'mp4',
+
+        // Output to pipe
+        'pipe:1'
     ];
+}
 
-    if (format === 'mjpeg') {
-        const filters = speed !== 1
-            ? `setpts=PTS/${speed},format=yuvj420p` // MJPEG uses yuvj420p typically
-            : "format=yuvj420p";
+function startFfmpeg(listPath, offsetSec) {
+    const args = createFfmpegArgs(listPath, offsetSec);
+    const ffmpeg = spawn('ffmpeg', args);
 
-        args.push(
-            "-vf", filters,
-            "-c:v", "mjpeg",
-            "-q:v", "5",         // Quality (2-31, lower is better. 5 is good/fast)
-            "-f", "mpjpeg",      // Multipart MJPEG format
-            "-boundary_tag", "ffmpeg",
-            "pipe:1"
-        );
-    } else {
-        // Fallback or explicit MPEG-TS (for HLS/Go2RTC if needed)
-        const filters = speed !== 1
-            ? `setpts=PTS/${speed},format=yuv420p`
-            : "format=yuv420p";
-
-        args.push(
-            "-vf", filters,
-            "-c:v", "libx264",
-            "-preset", "superfast",
-            "-tune", "zerolatency",
-            "-g", "50", "-keyint_min", "25", "-sc_threshold", "0",
-            "-b:v", "2000k", "-maxrate", "3000k", "-bufsize", "8000k",
-            "-an",
-            "-f", "mpegts",
-            "pipe:1"
-        );
-    }
-
-    console.log(`[FFmpegPipeline] Speed=${speed} Format=${format} Args: ${args.join(' ')}`);
-
-    const ffmpeg = spawn("ffmpeg", args, {
-        stdio: ["ignore", "pipe", "pipe"]
-    });
-
-    ffmpeg.stderr.on("data", d => {
-        const msg = d.toString();
-        if (msg.includes("Error") || msg.includes("fatal")) {
-            console.error(`[FFmpeg Error] ${msg}`);
+    ffmpeg.stderr.on('data', (data) => {
+        const msg = data.toString();
+        // Ignore non-critical warnings
+        if (!msg.includes('deprecated') && !msg.includes('libswresample')) {
+            console.error(`[FFMPEG PB] ${msg.trim()}`);
         }
     });
 
     return ffmpeg;
 }
 
-module.exports = { spawnFFmpeg };
+module.exports = { startFfmpeg };

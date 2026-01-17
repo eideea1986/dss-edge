@@ -2,14 +2,15 @@ const http = require('http');
 
 // --- SEGMENTED ARCHITECTURE (V2) ---
 const streamProc = require('./src/StreamProcessor');    // LIVE / MJPEG / FRAME INGEST
-const recorder = require('./src/Recorder');           // RECORDING (MKV STORAGE)
+const streamProc = require('./src/StreamProcessor');    // LIVE / MJPEG / FRAME INGEST
+// const recorder = require('./src/Recorder');           // RECORDING (MKV STORAGE) - DEPRECATED
 const intel = require('./src/IntelligenceEngine'); // MOTION / AI ANALYSIS
 const security = require('./src/SecurityManager');     // ARMING LOGIC
 const comms = require('./src/CommunicationManager');// EVENT DISPATCHING (Cloud/UI)
 const deviceMgr = require('./src/DeviceManager');      // CAMERA PROVISIONING / CONFIG
 const health = require('./src/HealthMonitor');       // CHANNEL STATUS / METRICS
 const db = require('./src/Database');           // INDEXING ENGINE
-const retention = require('./src/RetentionManager');    // STORAGE MANAGEMENT
+// const retention = require('./src/RetentionManager');    // STORAGE MANAGEMENT - DEPRECATED (Moved to dss-recorder)
 
 require('./aiClient'); // Incarca global.sendToAI
 
@@ -26,7 +27,7 @@ function init() {
     health.setConfiguredCameras(cameras);
 
     // 2. Start Infrastructure (Storage / Database)
-    retention.startCleanupLoop();
+    // retention.startCleanupLoop(); // DEPRECATED
 
     // 3. Register Intelligence Callback
     global.broadcastAI = (camId, result) => {

@@ -5,7 +5,7 @@ const path = require('path');
 const sqlite3 = require('sqlite3');
 const axios = require('axios');
 
-const STORAGE_ROOT = path.resolve(__dirname, '../../recorder/storage');
+const STORAGE_ROOT = path.resolve(__dirname, '../../storage');
 
 const { PlaybackSession } = require('../playback/PlaybackSession');
 const { createSession, getSession } = require('../playback/PlaybackManager');
@@ -87,6 +87,69 @@ router.get('/days', (req, res) => {
 
 router.get('/timeline/:camId/:date', (req, res) => {
     const { camId, date } = req.params;
+    // Date format: YYYY-MM-DD
+
+    // STRATEGY 1: Filesystem Scan (New NVR)
+    try {
+        const [y, m, d] = date.split('-');
+        const dayDir = path.join(STORAGE_ROOT, camId, y, m, d);
+
+        if (fs.existsSync(dayDir)) {
+            const files = fs.readdirSync(dayDir).filter(f => f.endsWith('.mp4'));
+            const segments = [];
+
+            files.forEach(f => {
+                try {
+                    const parts = f.replace('.mp4', '').split('-'); // HH-MM-SS
+                    if (parts.length < 3) return;
+
+                    const h = parseInt(parts[0]);
+                    const min = parseInt(parts[1]);
+                    const s = parseInt(parts[2]);
+
+                    // Create date in LOCAL time implicitly if treating string as parts? 
+                    // No, we need consistent UTC/Server time.
+                    // The server OS handles file creation. The filenames are HH-MM-SS.
+                    // We construct the date object.
+
+                    const segDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d), h, min, s, 0);
+                    const start = segDate.getTime();
+                    const end = start + 60000; // 60s segment default
+                    segments.push({ start, end });
+                } catch (e) { }
+            });
+
+            segments.sort((a, b) => a.start - b.start);
+
+            // Merge continuous segments for visualization
+            const ranges = [];
+            let curS = null, curE = null;
+
+            segments.forEach(seg => {
+                if (curS === null) {
+                    curS = seg.start;
+                    curE = seg.end;
+                } else {
+                    // If gap < 3 seconds, merge
+                    if (seg.start - curE < 3000) {
+                        curE = Math.max(curE, seg.end);
+                    } else {
+                        ranges.push({ start: curS, end: curE });
+                        curS = seg.start;
+                        curE = seg.end;
+                    }
+                }
+            });
+            if (curS !== null) ranges.push({ start: curS, end: curE });
+
+            return res.json(ranges);
+        }
+    } catch (e) {
+        console.error("Timeline FS Scan Error:", e);
+        // Continue to fallback
+    }
+
+    // STRATEGY 2: Legacy SQLite (Fallback)
     const dbPath = path.join(STORAGE_ROOT, camId, 'index.db');
     if (!fs.existsSync(dbPath)) return res.json([]);
     const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
@@ -107,6 +170,27 @@ router.get('/timeline/:camId/:date', (req, res) => {
         if (curS !== null) ranges.push({ start: curS, end: curE });
         res.json(ranges);
     });
+});
+
+router.get('/health', (req, res) => {
+    try {
+        const recorderService = require('../services/recorderService');
+        res.json(recorderService.getHealth());
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+router.post('/retention/force', async (req, res) => {
+    try {
+        const retention = require('../../retention/retention_engine');
+        console.log("[API] Forcing Retention Run...");
+        await retention.retentionRun();
+        res.json({ success: true, message: "Retention triggered" });
+    } catch (e) {
+        console.error("Retention Force Error:", e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 module.exports = router;

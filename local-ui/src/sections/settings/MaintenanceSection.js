@@ -131,3 +131,83 @@ export function RebootSection() {
         </div>
     );
 }
+
+export function TimeSettingsSection() {
+    const [timeData, setTimeData] = useState(null);
+    const [zones, setZones] = useState([]);
+    const [selectedZone, setSelectedZone] = useState("");
+
+    const refresh = () => API.get('/system/time').then(res => {
+        setTimeData(res.data);
+        if (res.data?.raw?.['Time zone']) {
+            // format: "Europe/Bucharest (EET, +0200)"
+            const simple = res.data.raw['Time zone'].split(' ')[0];
+            setSelectedZone(prev => prev || simple);
+        }
+    }).catch(console.error);
+
+    useEffect(() => {
+        refresh();
+        API.get('/system/timezones')
+            .then(res => {
+                if (Array.isArray(res.data)) setZones(res.data);
+            })
+            .catch(() => {
+                // Fallback if backend API is older
+                setZones(["Europe/Bucharest", "Europe/London", "Europe/Paris", "Europe/Berlin", "UTC", "America/New_York", "Asia/Tokyo"]);
+            });
+    }, []);
+
+    const setZone = async (z) => {
+        if (!window.confirm(`Set timezone to ${z}?`)) return;
+        try {
+            await API.post('/system/timezone', { timezone: z });
+            alert("Timezone updated! Refreshing system info...");
+            setTimeout(refresh, 2000);
+        } catch (e) { alert("Error: " + (e.response?.data || e.message)); }
+    };
+
+    if (!timeData) return <div style={{ padding: 20, color: "#aaa" }}>Loading time data...</div>;
+
+    const { raw } = timeData;
+
+    return (
+        <div style={{ padding: 20 }}>
+            <h2 style={{ fontSize: 18, marginBottom: 20, color: "#fff" }}>Setari Data si Ora Sistem</h2>
+            <div style={{ background: "#252526", padding: 25, border: "1px solid #444", maxWidth: 600 }}>
+                <div style={{ color: "#ccc", marginBottom: 15, fontSize: 13, lineHeight: "1.6" }}>
+                    <div>Timezone Server: <span style={{ color: "#fff", fontWeight: "bold" }}>{raw?.['Time zone'] || 'Unknown'}</span></div>
+                    <div style={{ marginTop: 5 }}>Ora Locala Server: <span style={{ color: "#00e676", fontWeight: "bold" }}>{raw?.['Local time'] || 'Unknown'}</span></div>
+                    <div style={{ marginTop: 5 }}>Ora UTC: {raw?.['Universal time']}</div>
+                </div>
+
+                <div style={{ marginTop: 25, borderTop: "1px solid #333", paddingTop: 20 }}>
+                    <h3 style={{ color: "#007acc", fontSize: 14, textTransform: "uppercase", marginBottom: 10 }}>Selectare Fus Orar</h3>
+                    <div style={{ display: "flex", gap: 10 }}>
+                        <select
+                            value={selectedZone}
+                            onChange={e => setSelectedZone(e.target.value)}
+                            style={{ padding: "8px", borderRadius: 4, background: "#333", color: "#fff", border: "1px solid #555", flex: 1 }}
+                        >
+                            <option value="">-- Select Timezone --</option>
+                            {zones.map(z => <option key={z} value={z}>{z}</option>)}
+                        </select>
+                        <button
+                            onClick={() => setZone(selectedZone)}
+                            disabled={!selectedZone}
+                            style={{ padding: "8px 16px", background: "#007acc", color: "white", border: "none", borderRadius: 4, cursor: "pointer", opacity: selectedZone ? 1 : 0.5 }}
+                        >
+                            Salveaza
+                        </button>
+                    </div>
+
+                    <div style={{ marginTop: 20 }}>
+                        <button onClick={() => setZone('Europe/Bucharest')} style={{ background: "transparent", border: "1px solid #4caf50", color: "#4caf50", padding: "6px 12px", borderRadius: 4, cursor: "pointer", fontSize: 12 }}>
+                            Setare Rapida: Romania (Europe/Bucharest)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}

@@ -1,0 +1,6 @@
+{
+    "name": "dss-retention-engine",
+    "version": "1.0.0",
+    "type": "module",
+    "main": "retention_engine.js"
+}

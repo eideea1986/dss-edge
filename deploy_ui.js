@@ -1,6 +1,4 @@
 const { Client } = require('ssh2');
-const fs = require('fs');
-const path = require('path');
 
 const config = {
     host: '192.168.120.208',
@@ -9,44 +7,30 @@ const config = {
     password: 'TeamS_2k25!'
 };
 
+const LOCAL_TAR = 'i:/dispecerat/github_release/dss-edge/ui_build.tar';
+const REMOTE_TAR = '/tmp/ui_build.tar';
+const TARGET_DIR = '/opt/dss-edge/local-ui/build';
+
 const conn = new Client();
-const localBuildDir = path.join(__dirname, 'local-ui/build');
-const remoteBuildDir = '/opt/dss-edge/local-ui/build';
-
-async function uploadDir(sftp, lDir, rDir) {
-    try {
-        // Ensure remote dir exists
-        await new Promise((res, rej) => sftp.mkdir(rDir, e => res()));
-    } catch { }
-
-    const files = fs.readdirSync(lDir);
-    for (const f of files) {
-        const lPath = path.join(lDir, f);
-        const rPath = `${rDir}/${f}`;
-        const stat = fs.statSync(lPath);
-
-        if (stat.isDirectory()) {
-            await uploadDir(sftp, lPath, rPath);
-        } else {
-            console.log(`Uploading ${f}...`);
-            await new Promise((res, rej) => sftp.fastPut(lPath, rPath, e => e ? rej(e) : res()));
-        }
-    }
-}
-
 conn.on('ready', () => {
-    console.log('SSH Connected. Uploading UI Build...');
-    conn.sftp(async (err, sftp) => {
+    console.log('SSH Ready - Deploying UI Build');
+    conn.sftp((err, sftp) => {
         if (err) throw err;
-        try {
-            // First time setup might need recursive mkdir, but we assume base exists
-            await uploadDir(sftp, localBuildDir, remoteBuildDir);
-            console.log('✅ UI DEPLOY SUCCESSFUL');
-        } catch (e) {
-            console.error(e);
-        } finally {
-            conn.end();
-            process.exit(0);
-        }
+
+        console.log("Uploading TAR...");
+        sftp.fastPut(LOCAL_TAR, REMOTE_TAR, (err) => {
+            if (err) throw err;
+            console.log("Uploaded. Extracting...");
+
+            const cmd = `rm -rf ${TARGET_DIR} && mkdir -p ${TARGET_DIR} && tar -xf ${REMOTE_TAR} -C ${TARGET_DIR} && rm ${REMOTE_TAR}`;
+
+            conn.exec(cmd, (err, stream) => {
+                if (err) throw err;
+                stream.on('close', (code, signal) => {
+                    console.log('UI Deployed Successfully. Code: ' + code);
+                    conn.end();
+                }).on('data', (d) => process.stdout.write(d)).stderr.on('data', (d) => process.stderr.write(d));
+            });
+        });
     });
 }).connect(config);

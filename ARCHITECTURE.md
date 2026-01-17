@@ -1,5 +1,54 @@
 # DSS SmartGuard Edge - Enterprise Architecture
 
+## 🌐 **Network Topology (Current Production)**
+
+### **Entities**
+*   **NVR Edge**: `192.168.120.208` (Local Processing, Recording)
+*   **HUB Video**: `192.168.120.205` (Central AI Analysis & Dispatcher)
+*   **Dispatch**: `192.168.133.8` (Internal UI & Alarming)
+*   **Dispatch Public**: `194.107.163.227` (Critical Traffic / Heartbeat from Edge)
+
+### **Traffic Separation**
+1.  **VPN1 (10.100.0.X)**: 
+    *   **Role**: **VIDEO STREAMS**
+    *   **Payloads**: RTSP Video Streams, Configuration comms.
+    *   **Route**: NVR (208) <-> HUB (205) via VPN Interface.
+
+2.  **VPN2 (10.200.0.X)**: 
+    *   **Role**: **AI IMAGES (Peer-to-Peer)**
+    *   **Payloads**: Raw Images sent to HUB for analysis.
+    *   **Route**: NVR (208) -> HUB (205).
+
+3.  **Public IP (194.107.163.227)**:
+    *   **Role**: **CRITICAL ALERTS**
+    *   **Payloads**: Heartbeats, Status Updates (Note: Alerts routed via HUB per Arch).
+    *   **Route**: NVR (208) -> Dispatch Public (227).
+
+### **Functional Flows**
+
+#### **1. AI Processing & Protection**
+*   **Logic**: 
+    1.  NVR (208) detects motion/trigger.
+    2.  NVR sends **Raw Image** to HUB (205) via **VPN2**.
+    3.  HUB performs AI Analysis:
+        *   **Negative**: Bypass (Drop).
+        *   **Positive**: HUB sends Alert + Annotated Image to Dispatch (192.168.133.8 - Configurable IP).
+*   **Protection (Circuit Breaker)**:
+    *   Implemented in `aiRequest.js`.
+    *   If HUB fails to respond **3 times** (Timeout/500 Error):
+        *   NVR enters **"Safety Pause" (10s)**.
+        *   Prevents "zombie" processes and RAM exhaustion.
+    *   **Filtering**: Native C++ Motion Filter is **Bypass/Disabled** to ensure 100% recall (no missed weak events).
+
+#### **2. Playback System**
+*   **Endpoint**: Dispatch UI (Player accessible via public/internal IP).
+*   **Flow**:
+    *   Operator clicks Event Image.
+    *   Dispatch proxies request to NVR Edge via Reverse Tunnel.
+    *   **Streaming**: MJPEG Stream (Gapless).
+    *   **Buffer**: Playback starts **3 seconds prior** to event timestamp.
+    *   **Data Path**: Stream routed via **VPN1 (Status/Tunnel)** to expose local recordings (192.168.120.208).
+
 ## 🏗️ **System Architecture**
 
 ```

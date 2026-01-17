@@ -1,0 +1,7 @@
+{
+    "name": "dss-recorder-orchestrator",
+    "version": "1.0.0",
+    "type": "module",
+    "main": "orchestrator.js",
+    "dependencies": {}
+}

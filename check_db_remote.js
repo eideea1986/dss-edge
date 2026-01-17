@@ -12,7 +12,7 @@ const conn = new Client();
 conn.on('ready', () => {
     console.log('--- CHECKING DB ---');
     // Check first 5 and last 5 segments
-    const cmd = `sqlite3 /opt/dss-edge/storage/cam_ccb3aba7/index.db "SELECT id, start_ts, (end_ts - start_ts) as dur FROM segments ORDER BY id ASC LIMIT 5; SELECT '---'; SELECT id, start_ts, (end_ts - start_ts) as dur FROM segments ORDER BY id DESC LIMIT 5;"`;
+    const cmd = `sqlite3 /opt/dss-edge/storage/cam_34b5a397/index.db "SELECT id, start_ts, (end_ts - start_ts) as dur FROM segments ORDER BY id ASC LIMIT 5; SELECT '---'; SELECT id, start_ts, (end_ts - start_ts) as dur FROM segments ORDER BY id DESC LIMIT 5;"`;
 
     conn.exec(cmd, (err, stream) => {
         if (err) throw err;

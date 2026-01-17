@@ -1,17 +1,28 @@
 /* dispatchClient.js - Transport Layer with ACK & Retry (Trassir Standard) */
 const axios = require('axios');
 const EventEmitter = require('events');
+const http = require('http');
+const https = require('https');
 
-// CONFIG
-const DISPATCH_URL = "http://192.168.120.205:8080/api/hub/events";
+const DISPATCH_VPN1 = "http://194.107.163.227:8091/api/events"; // VPN1 direct
 const MAX_RETRIES = 5;
 const INITIAL_RETRY_DELAY = 1000; // 1s start
+
+function getDispatchURL() {
+    // NEW ARCHITECTURE: NVR does NOT send events to Dispatch directly anymore.
+    // This channel is reserved for Heartbeat/Status only (handled elsewhere).
+    console.log('[Dispatch] Events are now routed via HUB (VPN2). Send skipped on Edge.');
+    return "http://127.0.0.1"; // Dummy local
+}
+
+
 
 class DispatchClient extends EventEmitter {
     constructor() {
         super();
         this.queue = [];
         this.isSending = false;
+        this.dispatchURL = getDispatchURL(); // Dynamic URL
 
         // Loop fast to keep queue moving
         setInterval(() => this.processQueue(), 100);
@@ -42,10 +53,17 @@ class DispatchClient extends EventEmitter {
 
         try {
             // Attempt Delivery
-            await axios.post(DISPATCH_URL, job.event, { timeout: 5000 });
+            const agentOptions = { localAddress: '10.100.0.3' };
+            const httpAgent = new http.Agent(agentOptions);
+            const httpsAgent = new https.Agent(agentOptions);
+            await axios.post(this.dispatchURL, job.event, {
+                timeout: 3000,
+                httpAgent,
+                httpsAgent
+            });
 
             // ACK SIGNAL
-            // console.log(`[Dispatch] Delievered ${job.event.eventId}`);
+            console.log(`[Dispatch] Delivered ${job.event.eventId}`);
             this.emit('ack', { eventId: job.event.eventId });
 
             // Remove
