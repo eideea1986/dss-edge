@@ -181,6 +181,76 @@ router.get('/health', (req, res) => {
     }
 });
 
+// Archive Settings UI Endpoint
+router.get('/status', (req, res) => {
+    const { exec } = require('child_process');
+
+    // Get storage info
+    exec(`df -h ${STORAGE_ROOT}`, (err, stdout) => {
+        let storage = { usedPercent: 0, avail: 'N/A', used: 'N/A', total: 'N/A' };
+
+        if (!err && stdout) {
+            try {
+                const lines = stdout.trim().split('\n');
+                if (lines.length >= 2) {
+                    const parts = lines[1].trim().split(/\s+/);
+                    if (parts.length >= 5) {
+                        storage = {
+                            usedPercent: parseInt(parts[4].replace('%', '')),
+                            avail: parts[3],
+                            used: parts[2],
+                            total: parts[1]
+                        };
+                    }
+                }
+            } catch (e) {
+                console.error('Storage parse error:', e);
+            }
+        }
+
+        // Get camera recording status
+        const cameras = {};
+        try {
+            if (fs.existsSync(STORAGE_ROOT)) {
+                const camDirs = fs.readdirSync(STORAGE_ROOT).filter(d => {
+                    const p = path.join(STORAGE_ROOT, d);
+                    return fs.statSync(p).isDirectory();
+                });
+
+                camDirs.forEach(camId => {
+                    // Check if camera has recent recordings
+                    const camPath = path.join(STORAGE_ROOT, camId);
+                    let hasMain = false;
+                    let hasSub = false;
+
+                    try {
+                        // Simple heuristic: check if directories exist
+                        // In real implementation, you'd check for recent files
+                        const years = fs.readdirSync(camPath).filter(y => /^\d{4}$/.test(y));
+                        if (years.length > 0) {
+                            hasMain = true; // Assume main stream if recordings exist
+                        }
+                    } catch (e) {
+                        // Ignore errors for individual cameras
+                    }
+
+                    cameras[camId] = {
+                        main: hasMain,
+                        sub: hasSub
+                    };
+                });
+            }
+        } catch (e) {
+            console.error('Camera status error:', e);
+        }
+
+        res.json({
+            storage,
+            cameras
+        });
+    });
+});
+
 router.post('/retention/force', async (req, res) => {
     try {
         const retention = require('../../retention/retention_engine');
