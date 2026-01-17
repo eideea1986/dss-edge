@@ -100,28 +100,22 @@ export default function DualStreamPlayer({ camId, isFullscreen, isHidden, style 
     const [mainStream, setMainStream] = useState(null);
     const [currentStream, setCurrentStream] = useState("sub");
 
-    // Acquire BOTH streams on mount
+    // Acquire SUBSTREAM on mount, MAIN STREAM only on fullscreen (lazy loading)
     useEffect(() => {
         if (isHidden || !camId) return;
 
         let active = true;
-        let subEntry, mainEntry;
+        let subEntry;
 
-        // CRITICAL: Acquire both streams simultaneously
-        Promise.all([
-            acquireStream(camId, "sub"),
-            acquireStream(camId, "hd")
-        ])
-            .then(([sub, main]) => {
+        // Always acquire substream
+        acquireStream(camId, "sub")
+            .then((sub) => {
                 if (!active) {
                     releaseStream(camId, "sub");
-                    releaseStream(camId, "hd");
                     return;
                 }
                 subEntry = sub;
-                mainEntry = main;
                 setSubStream(sub);
-                setMainStream(main);
 
                 // Start with substream (grid mode)
                 if (videoRef.current) {
@@ -130,15 +124,53 @@ export default function DualStreamPlayer({ camId, isFullscreen, isHidden, style 
                 }
             })
             .catch((err) => {
-                console.error(`[DualStream] Error for ${camId}:`, err);
+                console.error(`[DualStream] Error for sub ${camId}:`, err);
             });
 
         return () => {
             active = false;
             if (subEntry) releaseStream(camId, "sub");
-            if (mainEntry) releaseStream(camId, "hd");
         };
     }, [camId, isHidden]);
+
+    // Acquire MAIN STREAM only when fullscreen is activated
+    useEffect(() => {
+        if (!isFullscreen || isHidden || !camId) {
+            // Release main stream when leaving fullscreen
+            if (mainStream) {
+                releaseStream(camId, "hd");
+                setMainStream(null);
+            }
+            return;
+        }
+
+        let active = true;
+        let mainEntry;
+
+        acquireStream(camId, "hd")
+            .then((main) => {
+                if (!active) {
+                    releaseStream(camId, "hd");
+                    return;
+                }
+                mainEntry = main;
+                setMainStream(main);
+
+                // Switch to main stream immediately
+                if (videoRef.current) {
+                    videoRef.current.srcObject = main.media;
+                    videoRef.current.play().catch(() => { });
+                }
+            })
+            .catch((err) => {
+                console.error(`[DualStream] Error for main ${camId}:`, err);
+            });
+
+        return () => {
+            active = false;
+            if (mainEntry) releaseStream(camId, "hd");
+        };
+    }, [isFullscreen, camId, isHidden]);
 
     // INSTANT SWITCH on fullscreen change
     useEffect(() => {
