@@ -99,94 +99,30 @@ export function ArchiveSettingsSection({ cams }) {
         <div style={{ padding: 20 }}>
             <h2 style={{ fontSize: 18, marginBottom: 20, color: "#fff" }}>Archive & Storage Management</h2>
 
-            <div style={{ background: "#252526", padding: 20, border: "1px solid #444", marginBottom: 20 }}>
-                <h3 style={{ marginTop: 0, marginBottom: 15 }}>Recorded Streams Status</h3>
-                <table style={styles.table}>
-                    <thead>
-                        <tr><th style={styles.th}>Camera</th><th style={styles.th}>Main Stream</th><th style={styles.th}>Sub Stream</th><th style={styles.th}>Retention</th><th style={styles.th}>Status</th></tr>
-                    </thead>
-                    <tbody>
-                        {cams.map((c, i) => (
-                            <tr key={i}>
-                                <td style={styles.td}>{c.name || c.ip}</td>
-                                <td style={styles.td}>{c.recordStream === 'main' || !c.recordStream ? "YES" : "NO"}</td>
-                                <td style={styles.td}>{c.recordStream === 'sub' ? "YES" : "NO"}</td>
-                                <td style={styles.td}>{c.retention || 7} Days</td>
-                                <td style={styles.td}>
-                                    <span style={{ color: c.enabled ? "#4caf50" : "#f44336" }}>{c.enabled ? "Active" : "Disabled"}</span>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-                <div style={{ background: "#252526", padding: 20, border: "1px solid #444" }}>
-                    <h3 style={{ marginTop: 0, marginBottom: 15 }}>Archive Statistics</h3>
-                    {stats ? (
-                        <div style={{ display: "grid", gap: 8, fontSize: 13, color: "#ddd" }}>
-                            <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                <span>Total Cameras:</span>
-                                <b>{Object.keys(stats.cameras || {}).length}</b>
-                            </div>
-                            <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                <span>Recording:</span>
-                                <b>{Object.values(stats.cameras || {}).filter(c => c.main || c.sub).length}</b>
-                            </div>
-                            <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                <span>Disk Usage:</span>
-                                <b>{stats.storage?.usedPercent || 0}% Full</b>
-                            </div>
-                            <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                <span>Available Space:</span>
-                                <b>{stats.storage?.avail || "N/A"}</b>
-                            </div>
+            <div style={{ background: "#252526", padding: 20, border: "1px solid #444" }}>
+                <h3 style={{ marginTop: 0, marginBottom: 15 }}>Archive Statistics</h3>
+                {stats ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 20, fontSize: 14, color: "#ddd" }}>
+                        <div style={{ background: "#1e1e1e", padding: 15, borderRadius: 4, border: "1px solid #333" }}>
+                            <div style={{ fontSize: 12, color: "#888", marginBottom: 5 }}>Total Cameras</div>
+                            <div style={{ fontSize: 24, fontWeight: "bold", color: "#4caf50" }}>{Object.keys(stats.cameras || {}).length}</div>
                         </div>
-                    ) : (
-                        <div style={{ color: "#666", textAlign: "center", padding: 20 }}>Loading statistics...</div>
-                    )}
-                </div>
-
-                <div style={{ background: "#252526", padding: 20, border: "1px solid #444" }}>
-                    <h3 style={{ marginTop: 0, marginBottom: 15 }}>Camera Recording Status</h3>
-                    {stats && stats.cameras ? (
-                        <div style={{ display: "grid", gap: 8, fontSize: 13, color: "#ddd" }}>
-                            {Object.entries(stats.cameras).map(([camId, status]) => (
-                                <div key={camId} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #333" }}>
-                                    <span style={{ color: "#aaa" }}>{camId}:</span>
-                                    <span>
-                                        {status.main && <span style={{ color: "#4caf50", marginRight: 8 }}>●MAIN</span>}
-                                        {status.sub && <span style={{ color: "#2196f3" }}>●SUB</span>}
-                                        {!status.main && !status.sub && <span style={{ color: "#666" }}>IDLE</span>}
-                                    </span>
-                                </div>
-                            ))}
+                        <div style={{ background: "#1e1e1e", padding: 15, borderRadius: 4, border: "1px solid #333" }}>
+                            <div style={{ fontSize: 12, color: "#888", marginBottom: 5 }}>Recording</div>
+                            <div style={{ fontSize: 24, fontWeight: "bold", color: "#2196f3" }}>{Object.values(stats.cameras || {}).filter(c => c.main || c.sub).length}</div>
                         </div>
-                    ) : (
-                        <div style={{ color: "#666", textAlign: "center", padding: 20 }}>No camera data</div>
-                    )}
-                </div>
-            </div>
-
-            <div style={{ background: "#252526", padding: 20, border: "1px solid #444", marginTop: 20 }}>
-                <h3 style={{ marginTop: 0, borderBottom: "1px solid #444", paddingBottom: 10 }}>Active Camera Storage Mapping</h3>
-                <table style={styles.table}>
-                    <thead>
-                        <tr><th style={styles.th}>Camera Name / IP</th><th style={styles.th}>Storage ID</th><th style={styles.th}>Physical HDD Path</th></tr>
-                    </thead>
-                    <tbody>
-                        {cams.filter(c => c.enabled).map((cam, idx) => (
-                            <tr key={idx}>
-                                <td style={styles.td}>{cam.name || cam.ip}</td>
-                                <td style={styles.td}><code style={{ color: "#aaa" }}>{cam.storagePath || "N/A"}</code></td>
-                                <td style={styles.td}>
-                                    <input type="text" readOnly value={cam.physicalPath || "Generating..."} style={{ width: "100%", background: "#111", border: "1px solid #333", color: "#007acc", fontSize: 11, padding: "4px 8px", fontFamily: "monospace", borderRadius: 3 }} />
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+                        <div style={{ background: "#1e1e1e", padding: 15, borderRadius: 4, border: "1px solid #333" }}>
+                            <div style={{ fontSize: 12, color: "#888", marginBottom: 5 }}>Disk Usage</div>
+                            <div style={{ fontSize: 24, fontWeight: "bold", color: stats.storage?.usedPercent > 80 ? "#f44336" : "#4caf50" }}>{stats.storage?.usedPercent || 0}%</div>
+                        </div>
+                        <div style={{ background: "#1e1e1e", padding: 15, borderRadius: 4, border: "1px solid #333" }}>
+                            <div style={{ fontSize: 12, color: "#888", marginBottom: 5 }}>Available Space</div>
+                            <div style={{ fontSize: 24, fontWeight: "bold", color: "#fff" }}>{stats.storage?.avail || "N/A"}</div>
+                        </div>
+                    </div>
+                ) : (
+                    <div style={{ color: "#666", textAlign: "center", padding: 40 }}>Loading statistics...</div>
+                )}
             </div>
         </div>
     );
