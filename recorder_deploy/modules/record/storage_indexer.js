@@ -44,10 +44,45 @@ async function getDatabase(camId) {
 async function index(seg) {
     try {
         const db = await getDatabase(seg.cameraId);
-        // We want the relative path from the camera folder
-        // fullPath: /opt/dss-edge/storage/camId/YYYY/MM/DD/HH/file.mp4
-        // target: YYYY/MM/DD/HH/file.mp4
-        const relativeFile = seg.path.split(seg.cameraId + '/')[1] || path.basename(seg.path);
+
+        // TRUTH VERIFICATION: Check if the path from event actually exists
+        let actualPath = seg.path;
+        let relativeFile = null;
+
+        if (fs.existsSync(actualPath)) {
+            // Path exists as-is (hierarchical format)
+            relativeFile = seg.path.split(seg.cameraId + '/')[1] || path.basename(seg.path);
+        } else {
+            // Path doesn't exist - derive FLAT format equivalent
+            // Event path: /opt/dss-edge/storage/cam_xxx/2026/01/17/09/17-05.mp4
+            // Flat format: /opt/dss-edge/storage/cam_xxx/2026-01-17_09-17-05.mp4
+
+            const pathParts = actualPath.split('/');
+            const fileName = pathParts[pathParts.length - 1]; // "17-05.mp4"
+            const hour = pathParts[pathParts.length - 2];      // "09"
+            const day = pathParts[pathParts.length - 3];       // "17"
+            const month = pathParts[pathParts.length - 4];     // "01"
+            const year = pathParts[pathParts.length - 5];      // "2026"
+
+            // Construct flat filename: YYYY-MM-DD_HH-MM-SS.mp4
+            const [minute, second] = fileName.replace('.mp4', '').split('-');
+            const flatFileName = `${year}-${month}-${day}_${hour}-${minute}-${second}.mp4`;
+
+            const camDir = path.join(CONFIG.STORAGE_ROOT, seg.cameraId);
+            const flatPath = path.join(camDir, flatFileName);
+
+            if (fs.existsSync(flatPath)) {
+                // Found the real file in flat format
+                actualPath = flatPath;
+                relativeFile = flatFileName;
+                console.log(`[INDEXER] Path mismatch resolved: ${path.basename(seg.path)} -> ${flatFileName}`);
+            } else {
+                // File doesn't exist in either format - skip indexing
+                console.warn(`[INDEXER] File not found (tried both formats): ${seg.path}`);
+                db.close();
+                return;
+            }
+        }
 
         return new Promise((resolve, reject) => {
             db.run(`INSERT OR IGNORE INTO segments (file, start_ts, end_ts, type) VALUES (?, ?, ?, ?)`,
@@ -58,7 +93,9 @@ async function index(seg) {
                 }
             );
         });
-    } catch (e) { console.error(`[INDEXER] ${e.message}`); }
+    } catch (e) {
+        console.error(`[INDEXER] Error indexing segment:`, e.message);
+    }
 }
 
 async function run() {
