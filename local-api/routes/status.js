@@ -20,30 +20,76 @@ function checkPort(port) {
     });
 }
 
-// GET /services - Returns status of all critical services
+// GET /services - Returns REAL status of all critical services (TRUTH LAYER)
 router.get("/services", async (req, res) => {
+    const { exec } = require('child_process');
+    const util = require('util');
+    const execPromise = util.promisify(exec);
+
+    // Helper: Check SystemD service status
+    const checkSystemdService = async (serviceName) => {
+        try {
+            const { stdout } = await execPromise(`systemctl is-active ${serviceName}`, { timeout: 2000 });
+            return stdout.trim() === 'active';
+        } catch (e) {
+            return false; // Service not active or doesn't exist
+        }
+    };
+
+    // Helper: Check if process exists by name pattern
+    const checkProcessExists = async (processPattern) => {
+        try {
+            const { stdout } = await execPromise(`pgrep -f "${processPattern}"`, { timeout: 2000 });
+            return stdout.trim().length > 0; // Returns PIDs if found
+        } catch (e) {
+            return false; // No matching process
+        }
+    };
+
     const serviceDefinitions = [
-        { name: "go2rtc", label: "Go2RTC Video Engine", details: "Ports 1984 (API), 8554 (RTSP)", ports: [1984, 8554], critical: true },
-        { name: "local-api", label: "Local API", details: "Port 8080 (Web Interface)", ports: [8080], critical: true },
-        { name: "recorder", label: "Recorder Service", details: "Port 5003 (Recording Engine)", ports: [5003], critical: true },
-        { name: "camera-manager", label: "Camera Manager", details: "Port 5002 (RTSP Proxy)", ports: [5002], critical: false },
-        { name: "event-engine", label: "Event Engine", details: "Motion Detection & AI", ports: [], critical: false }
+        {
+            name: "dss-edge",
+            label: "Edge Orchestrator",
+            details: "Main service (recorder, camera-manager, events)",
+            type: "systemd",
+            systemdName: "dss-edge",
+            critical: true
+        },
+        {
+            name: "go2rtc",
+            label: "Go2RTC Video Engine",
+            details: "Streaming server (ports 1984, 8554)",
+            type: "systemd",
+            systemdName: "dss-go2rtc",
+            critical: true
+        },
+        {
+            name: "local-api",
+            label: "Local API",
+            details: "Web interface (port 8080)",
+            type: "systemd",
+            systemdName: "dss-api",
+            critical: true
+
+        }
     ];
 
     const serviceStatuses = await Promise.all(serviceDefinitions.map(async (svc) => {
-        let status = "Running";
+        let isRunning = false;
 
-        if (svc.ports.length > 0) {
-            const portChecks = await Promise.all(svc.ports.map(p => checkPort(p)));
-            const allPortsOpen = portChecks.every(result => result);
-            status = allPortsOpen ? "Running" : "Stopped";
+        if (svc.type === "systemd") {
+            // TRUTH SOURCE: SystemD
+            isRunning = await checkSystemdService(svc.systemdName);
+        } else if (svc.type === "process") {
+            // TRUTH SOURCE: Process check
+            isRunning = await checkProcessExists(svc.processPattern);
         }
 
         return {
             name: svc.name,
             label: svc.label,
             details: svc.details,
-            status,
+            status: isRunning ? "Running" : "Stopped",
             critical: svc.critical
         };
     }));
