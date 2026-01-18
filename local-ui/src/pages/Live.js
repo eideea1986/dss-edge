@@ -16,18 +16,34 @@ export default function Live() {
     const [selectedCam, setSelectedCam] = useState(null);
     const [gridSize, setGridSize] = useState(8);
     const [armingStatus, setArmingStatus] = useState({});
+    const [systemArmed, setSystemArmed] = useState(false); // EXEC-31: Global fallback
     const [camStatus, setCamStatus] = useState({});
 
-    // Poll Arming Status
+    // Poll Arming Status (EXEC-31: Live Truth)
     useEffect(() => {
         const checkArming = () => {
-            API.get("arming/debug").then(res => {
+            API.get("arming-state/state").then(res => {
                 const statusMap = {};
+                // EXEC-31: Set Global State
+                setSystemArmed(!!res.data.armed);
+
                 if (res.data && res.data.cameras) {
-                    res.data.cameras.forEach(c => statusMap[c.id] = c.isArmed);
+                    Object.keys(res.data.cameras).forEach(camId => {
+                        // EXEC-31: Map contains true armed state (system armed + camera assigned)
+                        statusMap[camId] = res.data.cameras[camId].armed;
+                    });
                 }
-                setArmingStatus(statusMap);
-            }).catch(() => { });
+                // Fail-safe: if global armed is false, clear all
+                if (!res.data.armed) {
+                    setArmingStatus({});
+                } else {
+                    setArmingStatus(statusMap);
+                }
+            }).catch(err => {
+                console.warn("[Live] Failed to fetch arming state", err);
+                setArmingStatus({}); // Fail-safe: Default to Disarmed
+                setSystemArmed(false);
+            });
         };
         checkArming();
         const interval = setInterval(checkArming, 5000);
@@ -55,6 +71,51 @@ export default function Live() {
         const i1 = setInterval(fetchCams, 10000);
         const i2 = setInterval(checkStatus, 3000);
         return () => { clearInterval(i1); clearInterval(i2); };
+    }, []);
+
+    // EXEC-32: Real-time Event Listener (WebSocket)
+    useEffect(() => {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        // Assuming the API server exposes port 8090, or we proxy. 
+        // Direct port 8090 access usually requires firewall rule, but assuming local LAN access.
+        const wsUrl = `${protocol}//${window.location.hostname}:8090`;
+
+        let ws;
+        let reconnectTimer;
+
+        const connect = () => {
+            console.log("[Live] Connecting to Event Hub:", wsUrl);
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => console.log("[Live] WS Connected");
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'ARMING_STATE_CHANGED') {
+                        console.log("[Live] ⚡ Real-Time Arming Update:", msg.armed);
+                        setSystemArmed(msg.armed);
+
+                        // Optimistically clear specific statuses if disarmed
+                        if (!msg.armed) setArmingStatus({});
+                    }
+                } catch (e) { console.error("[Live] WS Parse Error", e); }
+            };
+
+            ws.onclose = () => {
+                console.log("[Live] WS Disconnected, retrying...");
+                reconnectTimer = setTimeout(connect, 3000);
+            };
+
+            ws.onerror = (e) => console.log("[Live] WS Error (Port 8090 reachable?)");
+        };
+
+        connect();
+
+        return () => {
+            if (ws) ws.close();
+            clearTimeout(reconnectTimer);
+        };
     }, []);
 
     // NEW: Server Time Sync
@@ -118,6 +179,8 @@ export default function Live() {
                         <div style={{ fontWeight: "bold", fontSize: 13, color: "#fff", display: "flex", alignItems: "center", gap: 5 }}>
                             <div style={{ width: 8, height: 8, borderRadius: "50%", background: status === "Connected" ? "#4caf50" : "#f44336" }}></div>
                             LIVE VIEW
+                            {/* EXEC-31: Global Armed Indicator */}
+                            {systemArmed && <span style={{ color: '#e74c3c', marginLeft: 10, fontSize: 11 }}>● SYSTEM ARMED</span>}
                         </div>
                         <div style={{ display: "flex", gap: 1 }}>
                             {[1, 4, 6, 8, 9, 12, 16, 24, 32].map(num => (
@@ -172,7 +235,8 @@ export default function Live() {
                                 isHidden={!isVisible}
                                 onUpdate={handleUpdateCam}
                                 onMaximise={() => setSelectedCam(cam)}
-                                isArmed={armingStatus[cam.id]}
+                                // EXEC-31: Fallback to global systemArmed if specific status unknown
+                                isArmed={armingStatus[cam.id] !== undefined ? armingStatus[cam.id] : systemArmed}
                                 health={camStatus[cam.id]}
                             />
                         </div>

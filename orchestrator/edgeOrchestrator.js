@@ -4,6 +4,11 @@ const fs = require("fs");
 const Redis = require("ioredis");
 const redis = new Redis();
 
+// EXEC-30: Service Registry Integration
+const { getRegistry } = require("../lib/ServiceRegistry");
+const registry = getRegistry();
+
+
 // PATHS
 const ROOT_DIR = path.resolve(__dirname, "..");
 const CONFIG_CAMERAS = path.join(ROOT_DIR, "config/cameras.json");
@@ -23,6 +28,162 @@ let loadedCameras = [];
 let decoders = new Map(); // camId -> Process (Snapshot)
 let recorders = new Map(); // camId -> Process (Continuous Recording)
 let cachedStreams = { data: {}, timestamp: 0 };
+
+// EXEC-34: FAIL-FAST AUTHORITY SYSTEM
+const EXEC34 = {
+    systemState: 'INITIALIZING', // INITIALIZING | OPERATIONAL | DEGRADED | CRITICAL_FAIL
+    lastCertification: 0,
+    criticalFailures: [],
+    recorderStopped: false
+};
+
+/**
+ * EXEC-34 Step 1: CAMERA_READY Gate Check
+ * Returns true only if camera has functional proof
+ */
+async function isCameraReady(camId) {
+    try {
+        const status = await redis.hget('recorder:cam_status', camId);
+        return status === 'RECORDING';
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * EXEC-34 Step 3: Supervisor Authority - Validate Functional Proofs
+ * Runs every 10s and emits CRITICAL_FAIL if thresholds breached
+ */
+async function supervisorAuthority() {
+    const failures = [];
+
+    try {
+        // 1. Check Recorder Functional Proof
+        const recorderProof = await redis.get('recorder:functional_proof');
+        if (recorderProof) {
+            const proof = JSON.parse(recorderProof);
+            const age = Date.now() - proof.timestamp;
+
+            // Recorder heartbeat stale (>15s)
+            if (age > 15000) {
+                failures.push({ module: 'recorder', reason: 'HEARTBEAT_STALE', age });
+            }
+
+            // No active writers but cameras configured
+            if (proof.total_cameras > 0 && proof.active_writers === 0 && proof.suspended === 0) {
+                failures.push({ module: 'recorder', reason: 'NO_ACTIVE_WRITERS' });
+            }
+        } else {
+            failures.push({ module: 'recorder', reason: 'NO_PROOF_DATA' });
+        }
+
+        // 2. Check Arming Service
+        const armingHb = await redis.get('hb:arming');
+        if (!armingHb || Date.now() - parseInt(armingHb) > 15000) {
+            failures.push({ module: 'arming', reason: 'HEARTBEAT_STALE' });
+        }
+
+        // 3. Check Go2RTC (via cached streams)
+        const go2rtcTs = cachedStreams.timestamp;
+        if (Date.now() - go2rtcTs > 30000 && loadedCameras.length > 0) {
+            failures.push({ module: 'go2rtc', reason: 'NO_STREAM_DATA' });
+        }
+
+    } catch (e) {
+        failures.push({ module: 'supervisor', reason: 'CHECK_ERROR', error: e.message });
+    }
+
+    // Update State
+    EXEC34.criticalFailures = failures;
+
+    if (failures.length > 0) {
+        const criticalModules = failures.filter(f => ['recorder', 'arming'].includes(f.module));
+        if (criticalModules.length > 0) {
+            log(`[EXEC-34] CRITICAL FAIL DETECTED: ${JSON.stringify(criticalModules)}`);
+            EXEC34.systemState = 'CRITICAL_FAIL';
+
+            // Emit FAIL event via Redis
+            redis.publish('exec34:critical_fail', JSON.stringify({
+                timestamp: Date.now(),
+                failures: criticalModules
+            }));
+
+            // Step 4: Fail-Fast - Stop Recorder if critical
+            if (!EXEC34.recorderStopped && recorderProcess) {
+                log('[EXEC-34] FAIL-FAST: Stopping Recorder due to CRITICAL_FAIL');
+                recorderProcess.kill('SIGTERM');
+                EXEC34.recorderStopped = true;
+            }
+        } else {
+            EXEC34.systemState = 'DEGRADED';
+        }
+    } else {
+        EXEC34.systemState = 'OPERATIONAL';
+        EXEC34.recorderStopped = false;
+    }
+
+    // Publish System State
+    await redis.set('exec34:system_state', JSON.stringify({
+        state: EXEC34.systemState,
+        failures: EXEC34.criticalFailures,
+        timestamp: Date.now()
+    }));
+}
+
+/**
+ * EXEC-34 Step 5: Global NVR Certification Gate
+ * System is OPERATIONAL only if all proofs pass
+ */
+async function certifyNVR() {
+    try {
+        const recorderProof = await redis.get('recorder:functional_proof');
+        if (!recorderProof) {
+            return { certified: false, reason: 'NO_RECORDER_PROOF' };
+        }
+
+        const proof = JSON.parse(recorderProof);
+
+        // Rule 5.1: Recorder must be writing
+        if (proof.active_writers === 0 && proof.total_cameras > 0) {
+            return { certified: false, reason: 'RECORDER_NOT_WRITING' };
+        }
+
+        // Rule 5.1: No critical failures
+        if (EXEC34.criticalFailures.length > 0) {
+            return { certified: false, reason: 'CRITICAL_FAILURES_PRESENT' };
+        }
+
+        // All cameras must be READY or explicitly FAILED
+        const camStatuses = await redis.hgetall('recorder:cam_status');
+        const unknownCams = loadedCameras.filter(c =>
+            c.enabled !== false &&
+            !camStatuses[c.id] // No status = UNKNOWN
+        );
+
+        if (unknownCams.length > 0) {
+            return { certified: false, reason: 'UNKNOWN_CAMERA_STATES', count: unknownCams.length };
+        }
+
+        EXEC34.lastCertification = Date.now();
+        return { certified: true, activeWriters: proof.active_writers };
+
+    } catch (e) {
+        return { certified: false, reason: 'CERTIFICATION_ERROR', error: e.message };
+    }
+}
+
+/**
+ * EXEC-34 Step 4: Recovery Gate
+ * Recorder can only restart if recovery proof exists
+ */
+async function canRecoverRecorder() {
+    // Wait for at least one camera to be READY (via probe)
+    const camStatuses = await redis.hgetall('recorder:cam_status');
+    const readyCams = Object.values(camStatuses).filter(s => s === 'RECORDING' || s === 'FAIL_FAST_SUSPENDED');
+
+    // At least one camera must be in a known state
+    return readyCams.length > 0 || loadedCameras.length === 0;
+}
 
 /**
  * Helper to check if a stream is actually available in Go2RTC
@@ -180,70 +341,6 @@ function updateProcesses() {
                 decoders.set(cam.id, p);
             });
         });
-
-        // --- CONTINUOUS RECORDERS ---
-        // Stop recorders no longer needed (including throttled ones)
-        for (const [id, proc] of recorders) {
-            if (!activeIds.includes(id)) {
-                log(`Stopping Recorder for ${id} (Reason: ${blockRecording ? 'Disk Critical' : 'Disabled/Throttled'})`);
-                proc.kill('SIGTERM');
-                recorders.delete(id);
-            }
-        }
-        // Start missing recorders
-        loadedCameras.forEach(cam => {
-            if (cam.enabled === false) return;
-            if (blockRecording && !cam.ai) return;
-            if (onlyAI && !cam.ai) return;
-            if (recorders.has(cam.id)) return;
-            const mainUrl = cam.rtspMain || cam.streams?.main;
-            const subUrl = cam.rtspSub || cam.streams?.sub;
-            if (!mainUrl && !subUrl) return;
-
-            const rtspUrl = `rtsp://127.0.0.1:8554/${cam.id}`; // Default to Best Quality (Main if available)
-
-            // Verify stream exists in Go2RTC first
-            checkStreamAvailability(cam.id, (isAvailable) => {
-                if (!isAvailable) return;
-
-                log(`Starting Recorder for ${cam.id}...`);
-
-                const now = new Date();
-                const y = now.getFullYear();
-                const m = String(now.getMonth() + 1).padStart(2, '0');
-                const d = String(now.getDate()).padStart(2, '0');
-
-                const dayDir = path.join(ROOT_DIR, 'storage', cam.id, String(y), m, d);
-                if (!fs.existsSync(dayDir)) fs.mkdirSync(dayDir, { recursive: true });
-
-                const args = [
-                    '-hide_banner', '-y', '-loglevel', 'error',
-                    '-rtsp_transport', 'tcp',
-                    '-i', rtspUrl,
-                    '-map', '0', '-c', 'copy',
-                    '-f', 'segment',
-                    '-segment_time', '60',
-                    '-strftime', '1',
-                    '-reset_timestamps', '1',
-                    path.join(dayDir, '%H-%M-%S.mp4')
-                ];
-
-                const p = spawn('ffmpeg', args);
-
-                let stderrLog = "";
-                p.stderr.on('data', (d) => {
-                    stderrLog += d.toString();
-                    if (stderrLog.length > 500) stderrLog = stderrLog.slice(-500);
-                });
-
-                p.on('exit', (code) => {
-                    if (code !== 0) log(`Recorder ${cam.id} CRASHED (code ${code}). Stderr: ${stderrLog}`);
-                    else log(`Recorder ${cam.id} exited cleanly.`);
-                    recorders.delete(cam.id);
-                });
-                recorders.set(cam.id, p);
-            });
-        });
     });
 }
 
@@ -267,32 +364,31 @@ function applyPriorities() {
  * 4. CRITICAL RETENTION CONTROL
  * High-throughput cleanup.
  */
-function runRetention() {
-    exec(`df -P ${path.join(ROOT_DIR, 'storage')} | tail -1`, (err, stdout) => {
-        if (err || !stdout) return;
-        const usedPercent = parseInt(stdout.trim().split(/\s+/)[4].replace("%", ""));
-        redis.set("hb:disk_usage", usedPercent);
-
-        if (usedPercent >= 85) {
-            const isCritical = usedPercent >= 94;
-            const batchSize = isCritical ? 1500 : 500;
-            const dirCount = isCritical ? 30 : 10;
-
-            log(`Retention started (${isCritical ? 'CRITICAL' : 'NORMAL'}: ${usedPercent}%)`);
-            exec(`find ${path.join(ROOT_DIR, 'storage')} -mindepth 4 -maxdepth 4 -type d | sort | head -n ${dirCount}`, (e, out) => {
-                if (!out) return;
-                const dirs = out.trim().split('\n');
-                let done = 0;
-                dirs.forEach(d => {
-                    exec(`find "${d}" -type f | sort | head -n ${batchSize} | xargs rm -f && rmdir --ignore-fail-on-non-empty "${d}"`, () => {
-                        done++;
-                        if (done === dirs.length && isCritical) setTimeout(runRetention, 100);
-                    });
-                });
-            });
-        }
-    });
+/**
+ * 4. CRITICAL RETENTION CONTROL
+ * Delegates to retention_engine.js
+ * Mode: "normal" | "aggressive"
+ */
+function runRetention(mode = "normal") {
+    try {
+        const retention = require('../retention/retention_engine');
+        log(`Executing retention cleanup (Mode: ${mode}) per Supervisor order.`);
+        retention.retentionRun(mode);
+    } catch (e) {
+        log("Retention error: " + e.message);
+    }
 }
+
+// Subscribe to Supervisor Commands
+const sub = new Redis();
+sub.subscribe("state:retention:trigger", (err, count) => {
+    if (!err) log("Subscribed to retention commands.");
+});
+sub.on("message", (channel, message) => {
+    if (channel === "state:retention:trigger") {
+        runRetention(message);
+    }
+});
 
 /**
  * 5. SYSTEM MONITORING
@@ -309,11 +405,103 @@ function runSystemChecks() {
 /**
  * 6. STORAGE INDEXER
  */
-const INDEXER_PATH = path.join(ROOT_DIR, "modules/record/storage_indexer.js");
+/**
+ * 6. STORAGE INDEXER
+ */
 function startIndexer() {
-    log("Starting Storage Indexer...");
-    const p = spawn('node', [INDEXER_PATH]);
-    p.on('exit', () => setTimeout(startIndexer, 10000));
+    log("Starting Storage Indexer (via Registry)...");
+    /* EXEC-30: Use Registry */
+    const p = registry.safeSpawn('storage_indexer');
+    if (p) {
+        p.on('exit', () => setTimeout(startIndexer, 10000));
+    }
+}
+
+/**
+ * 6.5 ARMING SERVICE
+ */
+function startArmingService() {
+    log("Starting Arming Service (via Registry)...");
+    /* EXEC-30: Use Registry */
+    const p = registry.safeSpawn('arming_service', { stdio: 'inherit' });
+    if (p) {
+        p.on('exit', () => setTimeout(startArmingService, 5000));
+    }
+}
+
+/**
+ * 6.6 AI REQUEST SERVICE
+ */
+function startAIRequestService() {
+    log("Starting AI Request Service (via Registry)...");
+    /* EXEC-30: Use Registry */
+    const p = registry.safeSpawn('ai_request_service', { stdio: 'inherit' });
+    if (p) {
+        p.on('exit', () => setTimeout(startAIRequestService, 5000));
+    }
+}
+
+/**
+ * 6.5 RECORDER V2 (ENTERPRISE RECORDING ENGINE)
+ */
+let recorderProcess = null;
+let recorderRestartCount = 0;
+
+function startRecorder() {
+    log("Starting Recorder V2 (via Registry)...");
+
+    /* EXEC-30: Use Registry */
+    recorderProcess = registry.safeSpawn('recorder_v2', {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false
+    });
+
+    if (!recorderProcess) {
+        log("CRITICAL: Failed to spawn recorder via registry. Retrying in 5s...");
+        setTimeout(startRecorder, 5000);
+        return;
+    }
+
+    recorderProcess.stdout.on('data', (data) => {
+        const msg = data.toString().trim();
+        if (msg.includes('[RECORDER-V2]') || msg.includes('Recording')) {
+            console.log(`[RECORDER] ${msg}`);
+        }
+    });
+
+    recorderProcess.stderr.on('data', (data) => {
+        const msg = data.toString().trim();
+        // Filter out camera connection errors (expected for offline cameras)
+        if (!msg.includes('No route to host') &&
+            !msg.includes('Connection refused') &&
+            !msg.includes('Server returned 4')) {
+            console.error(`[RECORDER] ${msg}`);
+        }
+    });
+
+    recorderProcess.on('exit', async (code, signal) => {
+        recorderRestartCount++;
+        log(`Recorder exited (code: ${code}, signal: ${signal}). Restart #${recorderRestartCount}`);
+
+        // EXEC-34 Step 4: Recovery Gate - Check before restart
+        const canRecover = await canRecoverRecorder();
+        if (canRecover && !EXEC34.recorderStopped) {
+            log('[EXEC-34] Recovery Gate PASSED. Restarting Recorder...');
+            setTimeout(startRecorder, 10000);
+        } else {
+            log('[EXEC-34] Recovery Gate BLOCKED. Waiting for explicit recovery proof...');
+            // Will be restarted by supervisorAuthority when state clears
+            setTimeout(async () => {
+                if (await canRecoverRecorder() && !EXEC34.recorderStopped) {
+                    startRecorder();
+                }
+            }, 30000);
+        }
+    });
+
+    recorderProcess.on('error', (err) => {
+        log(`Recorder spawn error: ${err.message}`);
+    });
 }
 
 /**
@@ -335,26 +523,58 @@ function cleanupOrphanFFmpeg() {
 /**
  * 7. INITIALIZATION
  */
+function writePid() {
+    try {
+        const pidDir = "/run/dss";
+        if (!fs.existsSync(pidDir)) fs.mkdirSync(pidDir, { recursive: true });
+        fs.writeFileSync(path.join(pidDir, "orchestrator.pid"), process.pid.toString());
+    } catch (e) {
+        log("PID Write Error: " + e.message);
+    }
+}
+
 function init() {
-    log("Initializing DSS Edge Orchestrator (Optimized v4)...");
+    writePid();
+    log("Initializing DSS Edge Orchestrator (EXEC-34 ENFORCED)...");
     applyPriorities();
     generateGo2RTC();
     startIndexer();
+    startRecorder();
+    startArmingService();
+    startAIRequestService();
 
-    setInterval(runRetention, 30000); // 30s check
+    // setInterval(runRetention, 30000); // MOVED TO SUPERVISOR (AUTHORITY)
     setInterval(runSystemChecks, 15000);
     setInterval(updateProcesses, 15000); // 15s check
     setInterval(applyPriorities, 60000);
     setInterval(cleanupOrphanFFmpeg, 60000); // 60s orphan cleanup
 
+    // EXEC-34: Supervisor Authority Loop (Step 3)
+    setInterval(supervisorAuthority, 10000);
+
+    // EXEC-34: NVR Certification Loop (Step 5)
+    setInterval(async () => {
+        const cert = await certifyNVR();
+        if (!cert.certified) {
+            log(`[EXEC-34] NVR NOT CERTIFIED: ${cert.reason}`);
+        }
+        redis.set('exec34:nvr_certification', JSON.stringify(cert));
+    }, 30000);
+
     // Heartbeats
     setInterval(() => {
         const now = Date.now();
-        ["hb:recorder", "hb:live", "hb:indexer", "hb:retention"].forEach(k => redis.set(k, now));
+        ["hb:recorder", "hb:live", "hb:indexer", "hb:retention", "hb:arming", "hb:ai_request"].forEach(k => redis.set(k, now));
+
+        // Supervisor Heartbeat (File-based)
+        try { fs.writeFileSync("/tmp/dss-orchestrator.hb", now.toString()); } catch (e) { }
     }, 2000);
 
     // Initial Delay to let Go2RTC start
     setTimeout(updateProcesses, 5000);
+
+    // EXEC-34: Initial Authority Check after 15s
+    setTimeout(supervisorAuthority, 15000);
 }
 
 fs.watchFile(CONFIG_CAMERAS, () => {

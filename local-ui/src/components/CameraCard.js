@@ -77,9 +77,11 @@ function ZoneOverlay({ cam }) {
             }
 
             ctx.closePath();
-            ctx.fillStyle = "rgba(0, 255, 0, 0.15)";
-            ctx.strokeStyle = "#00ff00";
-            ctx.lineWidth = 2;
+            ctx.closePath();
+            // EXEC-34: High Visibility Armed Zones
+            ctx.fillStyle = "rgba(231, 76, 60, 0.3)"; // Red semi-transparent
+            ctx.strokeStyle = "#e74c3c"; // Red solid
+            ctx.lineWidth = 3;
             ctx.fill();
             ctx.stroke();
         };
@@ -178,6 +180,30 @@ function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed,
                     posterUrl={`/snapshots/${cam.id}.jpg`}
                     style={{ width: "100%", height: "100%" }}
                 />
+
+                {/* EXEC-31: ARMING BADGE */}
+                <div style={{
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    padding: '4px 8px',
+                    background: isArmed ? 'rgba(231, 76, 60, 0.9)' : 'rgba(0, 0, 0, 0.4)',
+                    color: '#fff',
+                    borderRadius: 4,
+                    fontSize: 10,
+                    fontWeight: 'bold',
+                    zIndex: 20,
+                    pointerEvents: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    boxShadow: isArmed ? '0 0 8px rgba(231, 76, 60, 0.6)' : 'none',
+                    border: isArmed ? '1px solid #c0392b' : '1px solid rgba(255,255,255,0.1)',
+                    transition: 'all 0.3s ease'
+                }}>
+                    <Shield size={12} color={isArmed ? "#fff" : "#aaa"} fill={isArmed ? "#fff" : "none"} />
+                    {isArmed ? 'ARMED' : 'DISARMED'}
+                </div>
 
                 {/* ZONE OVERLAY */}
                 {isArmed && <ZoneOverlay cam={cam} />}
