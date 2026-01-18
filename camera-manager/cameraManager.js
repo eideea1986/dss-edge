@@ -2,74 +2,78 @@ const http = require('http');
 
 // --- SEGMENTED ARCHITECTURE (V2) ---
 const streamProc = require('./src/StreamProcessor');    // LIVE / MJPEG / FRAME INGEST
-const streamProc = require('./src/StreamProcessor');    // LIVE / MJPEG / FRAME INGEST
-// const recorder = require('./src/Recorder');           // RECORDING (MKV STORAGE) - DEPRECATED
-const intel = require('./src/IntelligenceEngine'); // MOTION / AI ANALYSIS
+const intel = require('./src/IntelligenceEngine');     // MOTION / AI ANALYSIS
 const security = require('./src/SecurityManager');     // ARMING LOGIC
-const comms = require('./src/CommunicationManager');// EVENT DISPATCHING (Cloud/UI)
+const comms = require('./src/CommunicationManager');    // EVENT DISPATCHING (Cloud/UI)
 const deviceMgr = require('./src/DeviceManager');      // CAMERA PROVISIONING / CONFIG
 const health = require('./src/HealthMonitor');       // CHANNEL STATUS / METRICS
 const db = require('./src/Database');           // INDEXING ENGINE
-// const retention = require('./src/RetentionManager');    // STORAGE MANAGEMENT - DEPRECATED (Moved to dss-recorder)
 
-require('./aiClient'); // Incarca global.sendToAI
+require('./aiClient');
 
-/**
- * MAIN ORCHESTRATOR
- * Acționează doar ca un "Lipici" (Glue) între modulele specializate.
- */
+// ENTERPRISE CONFIG FLAGS
+global.enterpriseConfig = {
+    cameraEnableMode: 'vms',        // 'vms' = complete disable logic
+    disconnectOnDisable: true,
+    stopIngestOnDisable: true,
+    refreshDeviceConfig: 'on-connect', // refresh config from ONVIF when online
+    onvifWrite: true,
+    onvifWriteScope: ['codec', 'resolution', 'fps', 'gop'],
+    pipelineRestartOnApply: true
+};
+
+let cameras = [];
+
 function init() {
-    console.log("[Manager] Initializing Segmented NVR System...");
+    console.log("[Manager] Initializing Enterprise NVR System (VMS Mode)...");
 
-    // 1. Load Cameras & Provision Streams (Device Management Segment)
+    // 1. Load Cameras & Provision Streams
     cameras = deviceMgr.loadCameras();
     deviceMgr.provisionGo2RTC(cameras);
     health.setConfiguredCameras(cameras);
 
-    // 2. Start Infrastructure (Storage / Database)
-    // retention.startCleanupLoop(); // DEPRECATED
-
-    // 3. Register Intelligence Callback
+    // 2. Intelligence Callback
     global.broadcastAI = (camId, result) => {
         const cam = cameras.find(c => c.id === camId);
         intel.handleDetections(camId, result.detections, result.snapshot, cam?.name || camId);
     };
 
-    // 4. Background Discovery & Patching (Self-Healing)
-    const runDiscovery = async () => {
+    // 3. ENTERPRISE: Connection Hook for Config Refresh
+    setInterval(async () => {
         const currentStatus = health.getGlobalStatus();
         for (const cam of cameras) {
             const status = currentStatus[cam.id];
-            if (cam.enabled !== false && (!status || status.status === 'offline')) {
-                const found = await deviceMgr.discoverPaths(cam.ip, cam);
-                if (found) {
-                    console.log(`[Manager] Self-Healed Camera: ${cam.id}`);
-                    Object.assign(cam, found);
-                    deviceMgr.saveCameras(cameras);
-                    deviceMgr.provisionGo2RTC(cameras);
-                    // Force restart processing for this camera
-                    // recorder.stopRecording(cam.id);
-                    // recorder.startRecording(cam);
-                    streamProc.startIngest(cam);
+
+            // IF ONLINE AND NEVER REFRESHED (or refresh on-connect policy)
+            if (status && status.connected && !cam._lastRefreshedAt) {
+                if (global.enterpriseConfig.refreshDeviceConfig === 'on-connect') {
+                    const success = await deviceMgr.refreshCameraConfig(cam);
+                    if (success) {
+                        cam._lastRefreshedAt = Date.now();
+                        deviceMgr.saveCameras(cameras);
+                    }
                 }
             }
+            if (status && !status.connected) {
+                cam._lastRefreshedAt = null; // Reset for next connection
+            }
         }
-    };
+    }, 10000);
 
-    // Run once on startup and then every 5 minutes
-    runDiscovery();
-    setInterval(runDiscovery, 5 * 60 * 1000);
-
-    // 5. Start Processing Pipelines
+    // 4. Ingest & Processing Pipelines (VMS MODE)
     const syncPipelines = () => {
-        const armedStatus = {};
         cameras.forEach(cam => {
-            if (cam.enabled === false) return;
+            // ENTERPRISE: VMS MODE - If disabled, kill EVERYTHING
+            if (cam.enabled === false) {
+                if (streamProc.processes[cam.id]) {
+                    console.log(`[VMS] Killing Ingest for DISABLED camera: ${cam.id}`);
+                    streamProc.processes[cam.id].kill('SIGKILL');
+                    delete streamProc.processes[cam.id];
+                }
+                return;
+            }
 
             const isArmed = security.isCameraArmed(cam.id);
-            armedStatus[cam.id] = isArmed;
-
-            // Start/Stop Ingest based on ARMED state (AI only needs frames when armed)
             if (isArmed || cam.ai_forced) {
                 if (!streamProc.processes[cam.id]) {
                     console.log(`[Manager] Arming Ingest for ${cam.id}`);
@@ -78,7 +82,6 @@ function init() {
             } else {
                 if (streamProc.processes[cam.id]) {
                     console.log(`[Manager] Disarming Ingest for ${cam.id}`);
-                    // streamProc.stopIngest(cam.id); // Assuming stay in memory but stop process
                     if (streamProc.processes[cam.id]) {
                         streamProc.processes[cam.id].kill('SIGKILL');
                         delete streamProc.processes[cam.id];
@@ -88,19 +91,14 @@ function init() {
         });
     };
 
-    // Run every 30 seconds to track schedule changes
-    setInterval(syncPipelines, 30000);
+    setInterval(syncPipelines, 15000); // Faster sync for VMS mode
     syncPipelines();
 
-    // 6. Connect Segments via Events
+    // 5. Connect Segments via Events
     streamProc.on('frame', ({ camId, buffer }) => {
         const cam = cameras.find(c => c.id === camId);
         if (!cam) return;
-
-        // C. Health Monitoring Segment
         health.reportPing(camId);
-
-        // D. Intelligence / Motion Analysis Segment
         const isArmed = security.isCameraArmed(camId);
         intel.analyzeFrame(camId, buffer, cam.ai_server || {}, isArmed);
     });
@@ -108,37 +106,61 @@ function init() {
     startApiGateway();
 }
 
-/**
- * API GATEWAY (Port 5002)
- * Expune funcționalitățile modulelor către UI / Local API.
- */
 function startApiGateway() {
-    http.createServer(async (req, res) => { // Added async
+    http.createServer(async (req, res) => {
         const url = new URL(req.url, `http://${req.headers.host}`);
         const path = url.pathname;
-
         res.setHeader('Access-Control-Allow-Origin', '*');
 
-        // SEGMENT: STATUS REPORTING
+        // SEGMENT: STATUS
         if (path === '/status') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({
                 cameras: health.getGlobalStatus(),
-                retention: { active: true },
                 system: { uptime: process.uptime(), memory: process.memoryUsage().rss }
             }));
         }
 
-        // SEGMENT: MJPEG LIVE
+        // SEGMENT: APPLY CONFIG (EXPLICIT ONVIF WRITE)
+        if (path === '/config/apply' && req.method === 'POST') {
+            let body = '';
+            req.on('data', chunk => body += chunk);
+            req.on('end', async () => {
+                try {
+                    const data = JSON.parse(body);
+                    const cam = cameras.find(c => c.id === data.camId);
+                    if (!cam) throw new Error("Camera not found");
+
+                    // Update local params
+                    cam.params = { ...(cam.params || {}), ...data.params };
+                    deviceMgr.saveCameras(cameras);
+
+                    // Sync to physical device
+                    if (global.enterpriseConfig.onvifWrite) {
+                        await deviceMgr.syncConfigToDevice(cam);
+                    }
+
+                    // Restart pipeline if needed
+                    if (global.enterpriseConfig.pipelineRestartOnApply) {
+                        if (streamProc.processes[cam.id]) {
+                            streamProc.processes[cam.id].kill('SIGKILL');
+                            delete streamProc.processes[cam.id];
+                            streamProc.startIngest(cam);
+                        }
+                    }
+
+                    res.writeHead(200).end(JSON.stringify({ success: true }));
+                } catch (e) {
+                    res.writeHead(500).end(JSON.stringify({ error: e.message }));
+                }
+            });
+            return;
+        }
+
+        // MJPEG
         if (path.startsWith('/mjpeg/')) {
             const camId = path.split('/')[2];
-            res.writeHead(200, {
-                'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
-                'Cache-Control': 'no-cache',
-                'Connection': 'close',
-                'Pragma': 'no-cache'
-            });
-
+            res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame' });
             const sendFrame = (data) => {
                 if (data.camId === camId) {
                     res.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${data.buffer.length}\r\n\r\n`);
@@ -146,16 +168,15 @@ function startApiGateway() {
                     res.write('\r\n');
                 }
             };
-
             streamProc.on('frame', sendFrame);
             res.on('close', () => streamProc.removeListener('frame', sendFrame));
             return;
         }
 
-        // SEGMENT: SNAPSHOTS
+        // SNAPSHOTS
         if (path.startsWith('/snapshot/')) {
             const camId = path.split('/')[2];
-            const frame = await streamProc.getLatestFrame(camId); // Now awaited
+            const frame = streamProc.getLatestFrame(camId);
             if (frame) {
                 res.writeHead(200, { 'Content-Type': 'image/jpeg' });
                 return res.end(frame);
@@ -164,37 +185,12 @@ function startApiGateway() {
             return;
         }
 
-        // SEGMENT: HISTORICAL EVENTS
-        if (path === '/events/recent') {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify(comms.getRecentEvents()));
-        }
-
-        // SEGMENT: TIMELINE & PLAYBACK
-        if (path.startsWith('/timeline/')) {
-            const parts = path.split('/');
-            // /timeline/:camId?start=...&end=...
-            const camId = parts[2];
-            const start = parseInt(url.searchParams.get('start')) || (Math.floor(Date.now() / 1000) - 86400);
-            const end = parseInt(url.searchParams.get('end')) || Math.floor(Date.now() / 1000);
-
-            db.querySegments(camId, start, end).then(segments => {
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(segments));
-            }).catch(e => {
-                res.writeHead(500);
-                res.end(JSON.stringify({ error: e.message }));
-            });
-            return;
-        }
-
         res.writeHead(404).end();
     }).listen(5002, '0.0.0.0', () => {
-        console.log(`[Gateway] Orchestrator online on Port 5002`);
+        console.log(`[Gateway] Orchestrator online (Enterprise) on Port 5002`);
     });
 }
 
-// Global Exception Handler to prevent service crash
 process.on('uncaughtException', (err) => {
     console.error("[Manager:CRASH] Uncaught Exception:", err);
 });

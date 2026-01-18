@@ -16,32 +16,52 @@ export default function Live() {
     const [selectedCam, setSelectedCam] = useState(null);
     const [gridSize, setGridSize] = useState(8);
     const [armingStatus, setArmingStatus] = useState({});
-    const [systemArmed, setSystemArmed] = useState(false); // EXEC-31: Global fallback
+    const [systemArmed, setSystemArmed] = useState(false);
     const [camStatus, setCamStatus] = useState({});
 
-    // Poll Arming Status (EXEC-31: Live Truth)
+    // Grid Virtualization & Focus Policy
+    const [visibleCams, setVisibleCams] = useState(new Set());
+    const [focusedCam, setFocusedCam] = useState(null);
+    const MAX_ACTIVE_STREAMS = 16;
+
+    // Keyboard Shortcuts (Esc to exit fullscreen)
+    useEffect(() => {
+        const handleKeys = (e) => {
+            if (e.key === 'Escape' && selectedCam) {
+                setSelectedCam(null);
+            }
+        };
+        window.addEventListener('keydown', handleKeys);
+        return () => window.removeEventListener('keydown', handleKeys);
+    }, [selectedCam]);
+
+    // Default visible cams on load
+    useEffect(() => {
+        if (cams.length > 0 && visibleCams.size === 0) {
+            const initial = new Set();
+            cams.slice(0, gridSize).forEach(c => initial.add(c.id));
+            setVisibleCams(initial);
+        }
+    }, [cams, gridSize]);
+
+    // Poll Arming Status
     useEffect(() => {
         const checkArming = () => {
             API.get("arming-state/state").then(res => {
                 const statusMap = {};
-                // EXEC-31: Set Global State
                 setSystemArmed(!!res.data.armed);
-
                 if (res.data && res.data.cameras) {
                     Object.keys(res.data.cameras).forEach(camId => {
-                        // EXEC-31: Map contains true armed state (system armed + camera assigned)
                         statusMap[camId] = res.data.cameras[camId].armed;
                     });
                 }
-                // Fail-safe: if global armed is false, clear all
                 if (!res.data.armed) {
                     setArmingStatus({});
                 } else {
                     setArmingStatus(statusMap);
                 }
             }).catch(err => {
-                console.warn("[Live] Failed to fetch arming state", err);
-                setArmingStatus({}); // Fail-safe: Default to Disarmed
+                setArmingStatus({});
                 setSystemArmed(false);
             });
         };
@@ -50,7 +70,7 @@ export default function Live() {
         return () => clearInterval(interval);
     }, []);
 
-    // Poll Config & Status
+    // Poll Config & Status (Standard API)
     useEffect(() => {
         const fetchCams = () => API.get("cameras/config").then(res => setCams(res.data)).catch(console.error);
         fetchCams();
@@ -73,87 +93,79 @@ export default function Live() {
         return () => { clearInterval(i1); clearInterval(i2); };
     }, []);
 
-    // EXEC-32: Real-time Event Listener (WebSocket)
+    // DSS Event Listener (WebSocket for Arming State)
     useEffect(() => {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        // Assuming the API server exposes port 8090, or we proxy. 
-        // Direct port 8090 access usually requires firewall rule, but assuming local LAN access.
-        const wsUrl = `${protocol}//${window.location.hostname}:8090`;
-
+        const dssWsUrl = `${protocol}//${window.location.hostname}:8090`;
         let ws;
         let reconnectTimer;
-
         const connect = () => {
-            console.log("[Live] Connecting to Event Hub:", wsUrl);
-            ws = new WebSocket(wsUrl);
-
-            ws.onopen = () => console.log("[Live] WS Connected");
-
+            ws = new WebSocket(dssWsUrl);
             ws.onmessage = (event) => {
                 try {
                     const msg = JSON.parse(event.data);
                     if (msg.type === 'ARMING_STATE_CHANGED') {
-                        console.log("[Live] ⚡ Real-Time Arming Update:", msg.armed);
                         setSystemArmed(msg.armed);
-
-                        // Optimistically clear specific statuses if disarmed
                         if (!msg.armed) setArmingStatus({});
                     }
-                } catch (e) { console.error("[Live] WS Parse Error", e); }
+                } catch (e) { }
             };
-
             ws.onclose = () => {
-                console.log("[Live] WS Disconnected, retrying...");
                 reconnectTimer = setTimeout(connect, 3000);
             };
-
-            ws.onerror = (e) => console.log("[Live] WS Error (Port 8090 reachable?)");
         };
-
         connect();
-
         return () => {
             if (ws) ws.close();
             clearTimeout(reconnectTimer);
         };
     }, []);
 
-    // NEW: Server Time Sync
-    const [currentTime, setCurrentTime] = useState(new Date());
-    const [serverTimezone, setServerTimezone] = useState(null);
-
+    // IntersectionObserver for Virtualization (Only active when grid visible)
     useEffect(() => {
-        API.get('/system/time').then(res => {
-            if (res.data?.raw?.['Time zone']) setServerTimezone(res.data.raw['Time zone'].split(' ')[0]);
-        }).catch(() => { });
+        if (cams.length === 0 || selectedCam) return;
 
-        const i = setInterval(() => setCurrentTime(new Date()), 1000);
-        return () => clearInterval(i);
-    }, []);
+        const observer = new IntersectionObserver((entries) => {
+            setVisibleCams(prev => {
+                const next = new Set(prev);
+                entries.forEach(entry => {
+                    const id = entry.target.getAttribute('data-cam-id');
+                    if (entry.isIntersecting) {
+                        next.add(id);
+                    } else if (id) {
+                        next.delete(id);
+                    }
+                });
+                return next;
+            });
+        }, { threshold: 0.1, rootMargin: '200px' });
 
-    const formatTime = (date) => {
-        if (!date) return "";
-        const ts = date instanceof Date ? date.getTime() : date;
-        return formatLocalTime(ts, serverTimezone);
+        const cards = document.querySelectorAll('[data-cam-id]');
+        cards.forEach(card => observer.observe(card));
+
+        return () => observer.disconnect();
+    }, [cams, gridSize, selectedCam]);
+
+    // QUALITY POLICY - ANTIGRAVITY: --pause-background-streams true
+    const getQualityForCam = (camId, idx) => {
+        if (selectedCam) {
+            return (selectedCam.id === camId) ? 'hd' : 'off';
+        }
+
+        const isVisible = visibleCams.has(camId) || (idx < 4);
+        if (!isVisible) return 'off';
+        if (focusedCam === camId) return 'hd';
+        if (visibleCams.size > MAX_ACTIVE_STREAMS) return 'low';
+        return 'sub';
     };
 
-    const handleUpdateCam = async (camId, changes) => {
-        const newCams = cams.map(c => c.id === camId ? { ...c, ...changes } : c);
-        setCams(newCams);
-        try { await API.post("cameras/config", newCams); } catch (e) { console.error(e); }
-    };
-
-    // Grid Logic
+    // Grid Layout Config
     const getGridConfig = () => {
-        if (selectedCam) return { cols: "1fr", rows: "1fr" };
         switch (gridSize) {
             case 1: return { cols: "1fr", rows: "1fr" };
             case 4: return { cols: "repeat(2, 1fr)", rows: "repeat(2, 1fr)" };
-            case 6: return { cols: "repeat(3, 1fr)", rows: "repeat(2, 1fr)" };
-            case 8: return { cols: "repeat(4, 1fr)", rows: "repeat(2, 1fr)" }; // Trassir 8-view (4x2 usually or 1 big + 7 small) - keeping symetric for now
             case 9: return { cols: "repeat(3, 1fr)", rows: "repeat(3, 1fr)" };
             case 16: return { cols: "repeat(4, 1fr)", rows: "repeat(4, 1fr)" };
-            case 24: return { cols: "repeat(6, 1fr)", rows: "repeat(4, 1fr)" };
             case 25: return { cols: "repeat(5, 1fr)", rows: "repeat(5, 1fr)" };
             case 32: return { cols: "repeat(8, 1fr)", rows: "repeat(4, 1fr)" };
             default:
@@ -164,116 +176,92 @@ export default function Live() {
     };
 
     const grid = getGridConfig();
-    const capacity = selectedCam ? 1 : gridSize;
+    const capacity = gridSize;
 
     return (
-        <div className="live-page" style={{
-            width: "100%", height: "100%", background: "#0d0d0d", color: colors.text,
-            overflow: "hidden", display: "flex", flexDirection: "column"
-        }}>
+        <div className="live-page" style={{ width: "100%", height: "100%", background: "#000", color: colors.text, overflow: "hidden", display: "flex", flexDirection: "column", position: "relative" }}>
 
-            {/* TOOLBAR */}
+            {/* TOOLBAR - Hidden in Fullscreen Overlay Mode */}
             {!selectedCam && (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: "#1a1a1a", borderBottom: "1px solid #333", height: "32px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: "#050505", borderBottom: "1px solid #111", height: "30px", zIndex: 100 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 15 }}>
-                        <div style={{ fontWeight: "bold", fontSize: 13, color: "#fff", display: "flex", alignItems: "center", gap: 5 }}>
-                            <div style={{ width: 8, height: 8, borderRadius: "50%", background: status === "Connected" ? "#4caf50" : "#f44336" }}></div>
-                            LIVE VIEW
-                            {/* EXEC-31: Global Armed Indicator */}
-                            {systemArmed && <span style={{ color: '#e74c3c', marginLeft: 10, fontSize: 11 }}>● SYSTEM ARMED</span>}
+                        <div style={{ fontWeight: "800", fontSize: 10, color: "#999", display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{ width: 6, height: 6, borderRadius: "50%", background: status === "Connected" ? "#2ecc71" : "#e74c3c" }}></div>
+                            MONITORIZARE LIVE
                         </div>
-                        <div style={{ display: "flex", gap: 1 }}>
-                            {[1, 4, 6, 8, 9, 12, 16, 24, 32].map(num => (
-                                <button key={num} onClick={() => setGridSize(num)}
-                                    style={{
-                                        border: "none", background: gridSize === num ? "#007acc" : "#333",
-                                        color: "#fff", width: 26, height: 20, cursor: "pointer", fontSize: 10,
-                                        fontWeight: gridSize === num ? "bold" : "normal", marginRight: 1
-                                    }}
-                                >
-                                    {num}
-                                </button>
+                        <div style={{ display: "flex", gap: 2 }}>
+                            {[1, 4, 9, 16, 25, 32].map(num => (
+                                <button key={num} onClick={() => setGridSize(num)} style={{ border: "1px solid #1a1a1a", background: gridSize === num ? "#007acc" : "#0a0a0a", color: "#fff", width: 28, height: 18, cursor: "pointer", fontSize: 9, borderRadius: 2 }}>{num}</button>
                             ))}
                         </div>
                     </div>
-                    <div style={{ fontSize: 11, color: "#666" }}>{formatTime(currentTime)}</div>
                 </div>
             )}
 
-            {/* GRID AREA */}
+            {/* FULLSCREEN OVERLAY LAYER - ANTIGRAVITY: --fullscreen-mode overlay, --fullscreen-z-index 9999 */}
+            {selectedCam && (
+                <div style={{
+                    position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+                    background: "#000", zIndex: 9999, display: "flex"
+                }}>
+                    <CameraCard
+                        cam={selectedCam}
+                        isMaximized={true}
+                        isHidden={false}
+                        onMaximise={() => setSelectedCam(null)}
+                        isArmed={armingStatus[selectedCam.id] !== undefined ? armingStatus[selectedCam.id] : systemArmed}
+                        health={camStatus[selectedCam.id]}
+                        isReady={camStatus[selectedCam.id]?.connected === true}
+                        isDegraded={(armingStatus[selectedCam.id] !== undefined ? armingStatus[selectedCam.id] : systemArmed) && camStatus[selectedCam.id]?.connected !== true}
+                        quality="hd"
+                        isFocused={true}
+                    />
+                </div>
+            )}
+
+            {/* GRID LAYER - ANTIGRAVITY: --grid-visibility hidden when fullscreen */}
             <div style={{
-                display: "grid",
-                gridTemplateColumns: grid.cols,
-                gridTemplateRows: grid.rows,
-                gap: selectedCam ? 0 : 2,
-                flex: 1,
-                background: "#000",
-                padding: selectedCam ? 0 : 2,
-                overflow: "hidden"
+                display: "grid", gridTemplateColumns: grid.cols, gridTemplateRows: grid.rows, gap: 2,
+                flex: 1, background: "#000", padding: 2, overflowY: "auto", overflowX: "hidden",
+                visibility: selectedCam ? "hidden" : "visible",
+                pointerEvents: selectedCam ? "none" : "auto"
             }}>
                 {cams.map((cam, idx) => {
-                    // Logic: Keep card in DOM but hide if out of grid range, unless selected
-                    const isVisible = selectedCam ? (cam.id === selectedCam.id) : (idx < capacity);
+                    const isVisibleSlot = (idx < capacity);
+                    if (!isVisibleSlot) return null;
+                    const quality = getQualityForCam(cam.id, idx);
 
                     return (
-                        <div key={cam.id} style={{
-                            display: isVisible ? "flex" : "none",
-                            flexDirection: "column",
-                            position: "relative",
-                            width: "100%",
-                            height: "100%",
-                            background: "#000",
-                            overflow: "hidden",
-                            border: "none",
-                            padding: 0
-                        }}
-                            onDoubleClick={() => setSelectedCam(selectedCam ? null : cam)}
+                        <div key={cam.id} data-cam-id={cam.id}
+                            style={{
+                                position: "relative", width: "100%", height: "100%",
+                                minHeight: gridSize > 16 ? "100px" : "150px",
+                                background: "#000", overflow: "hidden"
+                            }}
+                            onMouseEnter={() => setFocusedCam(cam.id)}
+                            onMouseLeave={() => setFocusedCam(null)}
                         >
                             <CameraCard
                                 cam={cam}
-                                isMaximized={selectedCam && selectedCam.id === cam.id}
-                                isHidden={!isVisible}
-                                onUpdate={handleUpdateCam}
-                                onMaximise={() => setSelectedCam(cam)}
-                                // EXEC-31: Fallback to global systemArmed if specific status unknown
+                                isMaximized={false}
+                                isHidden={!isVisibleSlot}
+                                onMaximise={(c) => setSelectedCam(c)}
                                 isArmed={armingStatus[cam.id] !== undefined ? armingStatus[cam.id] : systemArmed}
                                 health={camStatus[cam.id]}
+                                isReady={camStatus[cam.id]?.connected === true}
+                                isDegraded={(armingStatus[cam.id] !== undefined ? armingStatus[cam.id] : systemArmed) && camStatus[cam.id]?.connected !== true}
+                                quality={quality}
+                                isFocused={focusedCam === cam.id}
                             />
                         </div>
                     );
                 })}
-
-                {/* Empty Slots visualization */}
-                {!selectedCam && Array.from({ length: Math.max(0, capacity - cams.length) }).map((_, i) => (
-                    <div key={`empty-${i}`} style={{ background: "#111", border: "1px dashed #333", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <span style={{ color: "#333", fontSize: 10 }}>NO SIGNAL</span>
-                    </div>
-                ))}
             </div>
 
-            {/* GLOBAL STYLES FOR VIDEO CONSTRAINTS */}
             <style>{`
-                /* Robust Absolute Positioning for Video */
-                .camera-card-container {
-                    position: relative;
-                    width: 100%;
-                    height: 100%;
-                    overflow: hidden;
-                }
-                video, img, canvas, video-stream-mse {
-                    position: absolute !important;
-                    top: 0; left: 0;
-                    width: 100% !important; 
-                    height: 100% !important;
-                    object-fit: contain !important;
-                    background: #000;
-                    border: none !important;
-                }
-                
-                /* Scrollbar hide */
-                ::-webkit-scrollbar { width: 6px; height: 6px; }
-                ::-webkit-scrollbar-track { background: #111; }
-                ::-webkit-scrollbar-thumb { background: #333; }
+                video, img { width: 100% !important; height: 100% !important; object-fit: fill !important; background: #000; }
+                ::-webkit-scrollbar { width: 2px; }
+                ::-webkit-scrollbar-thumb { background: #111; }
             `}</style>
         </div>
     );

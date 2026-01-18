@@ -12,30 +12,23 @@ const Playback = () => {
     const initCam = urlParams.get('camId');
 
     const [cameras, setCameras] = useState([]);
-    const [camId, setCamId] = useState(initCam || '');
+    const [selectedCams, setSelectedCams] = useState(initCam ? [initCam] : []);
     const [timelineSegments, setTimelineSegments] = useState([]);
     const [serverDayStart, setServerDayStart] = useState(0);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-    const [stats, setStats] = useState({ first: null, last: null });
     const [isLoading, setIsLoading] = useState(false);
     const [isPlaying, setIsPlaying] = useState(false);
     const [playbackSpeed, setPlaybackSpeed] = useState(1);
-    const [firstRecTime, setFirstRecTime] = useState(null);
-    const [lastRecTime, setLastRecTime] = useState(null);
     const [serverTimezone, setServerTimezone] = useState(null);
 
     const [zoom, setZoom] = useState(1);
     const [offsetMs, setOffsetMs] = useState(0);
     const [playheadMs, setPlayheadMs] = useState(null);
+    const [isSeeking, setIsSeeking] = useState(false);
 
-    // DEBUG & SYNC STATES
-    const [debugSnapshot, setDebugSnapshot] = useState(null);
-    const [isSeeking, setIsSeeking] = useState(false); // Lock updates during seek bounce
-    const [liveDebug, setLiveDebug] = useState({});
-
-    const videoRef = useRef(null);
+    const playersRef = useRef({}); // camId -> core instance
+    const videoRefs = useRef({});   // camId -> video element
     const canvasRef = useRef(null);
-    const playbackCoreRef = useRef(null);
 
     // --- HELPERS ---
     const formatTimeDisplay = (ms) => formatLocalTime(ms, serverTimezone);
@@ -77,53 +70,53 @@ const Playback = () => {
         setServerDayStart(start);
     }, [selectedDate, serverTimezone]);
 
+    // Timeline Data (Unified or primary)
     useEffect(() => {
-        if (!camId) return;
-        API.get(`/playback/stats/${camId}?_t=${Date.now()}`).then(res => setStats(res.data)).catch(console.error);
-    }, [camId]);
-
-    useEffect(() => {
-        if (!camId) return;
-        API.get(`/playback/timeline-day/${camId}/${selectedDate}?_ts=${Date.now()}`)
+        if (selectedCams.length === 0) return;
+        const primaryCam = selectedCams[0];
+        API.get(`/playback/timeline-day/${primaryCam}/${selectedDate}?_ts=${Date.now()}`)
             .then(res => {
-                const { segments } = res.data;
-                // segments are UTC.
-                // serverDayStart is UTC anchor for 00:00 Local.
-                setTimelineSegments(segments || []);
-
-                if (segments && segments.length > 0) {
-                    setFirstRecTime(segments[0].start_ts);
-                    setLastRecTime(segments[segments.length - 1].end_ts);
-                } else {
-                    setFirstRecTime(null);
-                    setLastRecTime(null);
-                }
+                setTimelineSegments(res.data.segments || []);
                 setOffsetMs(0);
                 setZoom(1);
             })
-            .catch(err => console.error("Timeline error", err));
-    }, [camId, selectedDate]);
+            .catch(console.error);
+    }, [selectedCams, selectedDate]);
 
+    // Manage Multi-Players
     useEffect(() => {
-        if (!camId || !videoRef.current) return;
-        if (playbackCoreRef.current) playbackCoreRef.current.destroy();
-        let baseURL = API.defaults.baseURL || '/api';
-        if (baseURL.endsWith('/')) baseURL = baseURL.slice(0, -1);
-        const core = new PlaybackCoreV2(videoRef.current, camId, baseURL);
-        playbackCoreRef.current = core;
-        return () => core.destroy();
-    }, [camId]);
+        selectedCams.forEach(id => {
+            if (!playersRef.current[id] && videoRefs.current[id]) {
+                const baseURL = (API.defaults.baseURL || '/api').replace(/\/$/, '');
+                playersRef.current[id] = new PlaybackCoreV2(videoRefs.current[id], id, baseURL);
 
-    // Initial Start
+                // Initial start if playhead exists
+                if (playheadMs !== null && serverDayStart) {
+                    playersRef.current[id].start(serverDayStart + playheadMs);
+                }
+            }
+        });
+
+        // Cleanup removed cams
+        Object.keys(playersRef.current).forEach(id => {
+            if (!selectedCams.includes(id)) {
+                playersRef.current[id].destroy();
+                delete playersRef.current[id];
+            }
+        });
+    }, [selectedCams, serverDayStart]);
+
+    // Playhead Start
     useEffect(() => {
-        if (playbackCoreRef.current && timelineSegments.length > 0 && serverDayStart && playheadMs === null) {
-            const firstSeg = timelineSegments[0];
-            const startTs = Number(firstSeg.start_ts);
-            playbackCoreRef.current.start(startTs);
+        if (selectedCams.length > 0 && timelineSegments.length > 0 && serverDayStart && playheadMs === null) {
+            const startTs = Number(timelineSegments[0].start_ts);
             setPlayheadMs(startTs - serverDayStart);
+            selectedCams.forEach(id => {
+                if (playersRef.current[id]) playersRef.current[id].start(startTs);
+            });
             setIsPlaying(true);
         }
-    }, [timelineSegments, serverDayStart, playheadMs]);
+    }, [timelineSegments, serverDayStart, playheadMs, selectedCams]);
 
     // Video Listeners
     useEffect(() => {
@@ -149,29 +142,35 @@ const Playback = () => {
         }
     }, []);
 
-    // Main Loop & Debug
+    // Unified Sync Loop
     useEffect(() => {
         const interval = setInterval(() => {
-            if (!playbackCoreRef.current || !serverDayStart) return;
-            const currentEpoch = playbackCoreRef.current.getCurrentEpochMs();
+            if (selectedCams.length === 0 || !serverDayStart || isSeeking) return;
 
-            // Live Debug Data
-            setLiveDebug({
-                BrowserClock: new Date().toLocaleTimeString(),
-                LoopEpoch: currentEpoch,
-                LoopLocal: formatTimeDisplay(currentEpoch),
-                PlayheadMs: playheadMs,
-                IsSeeking: isSeeking,
-                VideoTime: videoRef.current ? videoRef.current.currentTime.toFixed(2) : 0
-            });
+            // Get sync from first player
+            const primaryId = selectedCams[0];
+            const core = playersRef.current[primaryId];
+            if (!core) return;
 
-            if (currentEpoch && currentEpoch > 0 && !isSeeking) {
-                // playheadMs is offset from serverDayStart
+            const currentEpoch = core.getCurrentEpochMs();
+            if (currentEpoch && currentEpoch > 0) {
                 setPlayheadMs(currentEpoch - serverDayStart);
+
+                // Gap-Sync Logic for slave players
+                selectedCams.slice(1).forEach(id => {
+                    const slave = playersRef.current[id];
+                    if (slave) {
+                        const slaveEpoch = slave.getCurrentEpochMs();
+                        // Auto-skip gaps if drift > 2s
+                        if (Math.abs(slaveEpoch - currentEpoch) > 2000) {
+                            slave.seekTo(currentEpoch);
+                        }
+                    }
+                });
             }
-        }, 100);
+        }, 200);
         return () => clearInterval(interval);
-    }, [serverDayStart, isSeeking, playheadMs, serverTimezone]); // Add serverTimezone to dep
+    }, [serverDayStart, isSeeking, selectedCams]);
 
     // --- DRAW ---
     const draw = useCallback(() => {
@@ -290,82 +289,46 @@ const Playback = () => {
     };
 
     const handleCanvasClick = (e) => {
-        if (!serverDayStart || !playbackCoreRef.current) return;
-        if (timelineSegments.length === 0) return;
+        if (!serverDayStart || timelineSegments.length === 0) return;
 
         const canvas = canvasRef.current;
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
-        const clickedRelativeMs = xToTime(x, rect.width); // Offset 0-24h
-        const clampedMs = Math.max(0, Math.min(DAY_MS, clickedRelativeMs));
+        const clickedRelativeMs = xToTime(x, rect.width);
+        const clickedAbsoluteTs = serverDayStart + Math.max(0, Math.min(DAY_MS, clickedRelativeMs));
 
-        // CORE LOGIC: Anchor + Offset = UTC Epoch
-        const clickedAbsoluteTs = serverDayStart + clampedMs;
+        setIsSeeking(true);
+        setPlayheadMs(clickedAbsoluteTs - serverDayStart);
 
-        let nearestSegment = timelineSegments[0];
-        let minDistance = Math.abs(nearestSegment.start_ts - clickedAbsoluteTs);
-        let clickInside = false;
-
-        for (const seg of timelineSegments) {
-            if (clickedAbsoluteTs >= seg.start_ts && clickedAbsoluteTs <= seg.end_ts) {
-                nearestSegment = seg;
-                minDistance = 0;
-                clickInside = true;
-                break;
-            }
-            const distToStart = Math.abs(seg.start_ts - clickedAbsoluteTs);
-            if (distToStart < minDistance) {
-                minDistance = distToStart;
-                nearestSegment = seg;
-            }
-        }
-
-        // Decide Seek Target
-        let seekTs;
-        let decisionType = "";
-
-        if (clickInside) {
-            seekTs = clickedAbsoluteTs;
-            decisionType = "EXACT_IN_SEGMENT";
-        } else {
-            seekTs = nearestSegment.start_ts;
-            decisionType = "SNAP_TO_NEAREST";
-        }
-
-        // LOG DEBUG SNAPSHOT
-        setDebugSnapshot({
-            clickLocal: formatTimeDisplay(clickedAbsoluteTs),
-            clickEpoch: clickedAbsoluteTs,
-            clickType: clickInside ? "GREEN (DATA)" : "BLACK (NO DATA)",
-            decision: decisionType,
-            targetLocal: formatTimeDisplay(seekTs),
-            targetEpoch: seekTs,
-            offsetInfo: `Anchor=${serverDayStart}, Offset=${clampedMs}`
+        selectedCams.forEach(id => {
+            if (playersRef.current[id]) playersRef.current[id].seekTo(clickedAbsoluteTs);
         });
 
-        // Trigger Seek with Grace Period
-        setIsSeeking(true);
-        playbackCoreRef.current.seekTo(seekTs);
-        setPlayheadMs(seekTs - serverDayStart);
+        setTimeout(() => setIsSeeking(false), 1000);
     };
 
-    const handlePlay = () => { if (videoRef.current) { videoRef.current.play(); setIsPlaying(true); } };
-    const handlePause = () => { if (videoRef.current) { videoRef.current.pause(); setIsPlaying(false); } };
-    const handleStop = () => { if (videoRef.current) { videoRef.current.pause(); videoRef.current.currentTime = 0; setIsPlaying(false); } };
-    const handleSkip = (seconds) => {
-        if (!playbackCoreRef.current || !serverDayStart) return;
-        const currentEpoch = playbackCoreRef.current.getCurrentEpochMs();
-        if (currentEpoch) {
-            const newTs = currentEpoch + (seconds * 1000);
-            playbackCoreRef.current.seekTo(newTs);
-            setPlayheadMs(newTs - serverDayStart);
-        }
+    const handlePlay = () => {
+        setIsPlaying(true);
+        selectedCams.forEach(id => {
+            const v = videoRefs.current[id];
+            if (v) v.play();
+        });
     };
+
+    const handlePause = () => {
+        setIsPlaying(false);
+        selectedCams.forEach(id => {
+            const v = videoRefs.current[id];
+            if (v) v.pause();
+        });
+    };
+
     const handleSpeedChange = (speed) => {
-        if (videoRef.current) {
-            videoRef.current.playbackRate = speed;
-            setPlaybackSpeed(speed);
-        }
+        setPlaybackSpeed(speed);
+        selectedCams.forEach(id => {
+            const v = videoRefs.current[id];
+            if (v) v.playbackRate = speed;
+        });
     };
 
     // --- STYLES ---
@@ -409,20 +372,28 @@ const Playback = () => {
             </div>
 
             <div style={{ marginBottom: 10, display: 'flex', gap: 15, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
-                {/* Cameras Select */}
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <label style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>Camera</label>
-                    <select
-                        value={camId}
-                        onChange={e => {
-                            const newId = e.target.value;
-                            window.location.href = `#/playback?camId=${newId}`;
-                            window.location.reload();
-                        }}
-                        style={{ padding: '4px 8px', background: '#333', color: '#fff', border: '1px solid #555', borderRadius: 4, outline: 'none' }}
-                    >
-                        {cameras.map(c => <option key={c.id} value={c.id}>{c.name || c.ip}</option>)}
-                    </select>
+                    <label style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>Select Cameras (Ctrl+Click)</label>
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {cameras.map(c => (
+                            <button
+                                key={c.id}
+                                onClick={() => {
+                                    if (selectedCams.includes(c.id)) {
+                                        setSelectedCams(selectedCams.filter(id => id !== c.id));
+                                    } else {
+                                        setSelectedCams([...selectedCams, c.id]);
+                                    }
+                                }}
+                                style={{
+                                    padding: '4px 8px', border: '1px solid #444', borderRadius: 4, fontSize: 11,
+                                    background: selectedCams.includes(c.id) ? '#2ecc71' : '#333', color: '#fff', cursor: 'pointer'
+                                }}
+                            >
+                                {c.name || c.id}
+                            </button>
+                        ))}
+                    </div>
                 </div>
                 {/* Date Select */}
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -445,17 +416,24 @@ const Playback = () => {
                 )}
             </div>
 
-            {/* Video Player */}
-            <div className="video-container" style={{ position: 'relative', background: '#000', borderRadius: 8, overflow: 'hidden', width: '100%', flex: 1, minHeight: 0, marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
-                <video ref={videoRef} id="player" autoPlay playsInline muted style={{ maxHeight: '100%', maxWidth: '100%', outline: 'none' }} />
-                {isLoading && (
-                    <div style={{
-                        position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                        color: 'white', background: 'rgba(0,0,0,0.7)', padding: '10px 20px', borderRadius: '4px', pointerEvents: 'none'
-                    }}>
-                        Buffering...
+            {/* Multicam Grid */}
+            <div className="video-container" style={{
+                flex: 1, minHeight: 0, marginBottom: 10,
+                display: 'grid', gridTemplateColumns: selectedCams.length > 1 ? 'repeat(2, 1fr)' : '1fr',
+                gap: 4, background: '#000', borderRadius: 8, padding: 4
+            }}>
+                {selectedCams.map(id => (
+                    <div key={id} style={{ position: 'relative', background: '#111', borderRadius: 4, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <video
+                            ref={el => videoRefs.current[id] = el}
+                            autoPlay playsInline muted
+                            style={{ maxHeight: '100%', maxWidth: '100%' }}
+                        />
+                        <div style={{ position: 'absolute', top: 4, left: 4, background: 'rgba(0,0,0,0.6)', padding: '2px 6px', borderRadius: 4, fontSize: 10 }}>
+                            {cameras.find(c => c.id === id)?.name || id}
+                        </div>
                     </div>
-                )}
+                ))}
             </div>
 
             {/* Timeline */}

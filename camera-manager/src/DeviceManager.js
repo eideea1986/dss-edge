@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const DeviceFactory = require('../adapters/DeviceFactory');
 
 class DeviceManager {
     constructor() {
@@ -19,6 +20,7 @@ class DeviceManager {
             { u: 'webadmin', p: 'webadmin' },
             { u: 'admin', p: 'TeamS_2k25!' }
         ];
+        this.adapters = {};
     }
 
     loadCameras() {
@@ -26,7 +28,6 @@ class DeviceManager {
             if (!fs.existsSync(this.configPath)) return [];
             const data = fs.readFileSync(this.configPath, 'utf8').replace(/^\uFEFF/, '');
             let cams = JSON.parse(data);
-            // De-duplicate if needed (keep unique IDs)
             const map = {};
             cams.forEach(c => map[c.id] = c);
             return Object.values(map);
@@ -44,13 +45,54 @@ class DeviceManager {
         }
     }
 
+    /**
+     * ENTERPRISE: Refresh device config from camera
+     */
+    async refreshCameraConfig(cam) {
+        console.log(`[DeviceManager] Refreshing config for ${cam.id} (${cam.ip})`);
+        try {
+            const adapter = DeviceFactory.createAdapter(cam);
+            const connected = await adapter.connect();
+            if (connected) {
+                const info = await adapter.getDeviceInfo();
+                console.log(`[DeviceManager] Fetched Info for ${cam.id}:`, info.params);
+
+                // Update local config params if bidirectional is enabled
+                if (info.params) {
+                    cam.params = { ...(cam.params || {}), ...info.params };
+                }
+                return true;
+            }
+        } catch (e) {
+            console.error(`[DeviceManager] Refresh Failed for ${cam.id}:`, e.message);
+        }
+        return false;
+    }
+
+    /**
+     * ENTERPRISE: Sync local config to physical camera
+     */
+    async syncConfigToDevice(cam) {
+        if (!cam.params) return false;
+        console.log(`[DeviceManager] Syncing local config to camera ${cam.id}`);
+        try {
+            const adapter = DeviceFactory.createAdapter(cam);
+            await adapter.connect();
+            await adapter.applyDeviceConfig(cam.params);
+            console.log(`[DeviceManager] Successfully synced config to ${cam.id}`);
+            return true;
+        } catch (e) {
+            console.error(`[DeviceManager] Sync to Device Failed for ${cam.id}:`, e.message);
+            return false;
+        }
+    }
+
     provisionGo2RTC(cameras) {
         let yaml = "streams:\n";
         cameras.forEach(cam => {
             if (cam.enabled !== false) {
                 const hd = (cam.rtspMain || (cam.streams && cam.streams.main) || cam.rtsp || "").trim();
                 const sub = (cam.rtsp || (cam.streams && cam.streams.sub) || "").trim();
-
                 const suffix = "#backchannel=0#tcp";
 
                 if (hd) {
@@ -71,12 +113,8 @@ class DeviceManager {
         }
     }
 
-    /**
-     * Attempts to find a working RTSP path for a device.
-     */
     async discoverPaths(ip, currentCam) {
         console.log(`[DeviceManager] Discovering paths for ${ip}...`);
-
         const credsToTry = [...this.commonCreds];
         if (currentCam?.user) credsToTry.unshift({ u: currentCam.user, p: currentCam.pass });
 
@@ -86,14 +124,11 @@ class DeviceManager {
                 try {
                     const working = await new Promise((resolve) => {
                         const { exec } = require('child_process');
-                        // Just probe headers (-t 1 is enough)
                         exec(`ffmpeg -rtsp_transport tcp -i "${subUrl}" -t 1 -f null /dev/null`, (err) => {
                             resolve(!err);
                         });
                     });
-
                     if (working) {
-                        console.log(`[DeviceManager] Found working stream for ${ip}: ${pat.id}`);
                         return {
                             user: cred.u,
                             pass: cred.p,

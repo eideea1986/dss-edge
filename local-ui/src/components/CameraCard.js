@@ -1,10 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { colors } from "../theme";
-import DualStreamPlayer from "./DualStreamPlayer"; // Dual Stream for Instant Fullscreen Switch
-import RecorderPlayer from "./RecorderPlayer"; // For High Quality Playback View
-import MSEPlayer from "./MSEPlayer"; // For Robust Live Fullscreen (TCP)
-import { Maximize, Minimize, Circle, Activity, Archive, Shield, Lock, SettingsIcon as Settings, Video } from "./Icons";
+import DualStreamPlayer from "./DualStreamPlayer";
+import MSEPlayer from "./MSEPlayer";
+import { Maximize, Minimize, Circle, Activity, Archive, Shield, SettingsIcon } from "./Icons";
 
 // --- STYLES ---
 const containerStyle = {
@@ -15,31 +13,30 @@ const containerStyle = {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
-    border: "1px solid #333",
-    borderRadius: 2
+    border: "1px solid #222"
 };
 
-const iconBtnStyle = {
-    background: "rgba(0,0,0,0.5)",
-    border: "1px solid rgba(255,255,255,0.2)",
-    color: "rgba(255,255,255,0.9)",
+const controlBtnStyle = {
+    background: "rgba(20,20,20,0.8)",
+    border: "1px solid rgba(255,255,255,0.15)",
+    color: "#fff",
     borderRadius: 4,
-    width: 28,
-    height: 28,
+    width: 32,
+    height: 32,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     cursor: "pointer",
-    marginRight: 2
+    transition: "all 0.2s ease"
 };
 
 // --- ZONE OVERLAY COMPONENT ---
-function ZoneOverlay({ cam }) {
-    const containerRef = React.useRef(null);
-    const canvasRef = React.useRef(null);
+function ZoneOverlay({ cam, isArmed }) {
+    const containerRef = useRef(null);
+    const canvasRef = useRef(null);
     const [dims, setDims] = useState({ w: 0, h: 0 });
 
-    React.useEffect(() => {
+    useEffect(() => {
         const obs = new ResizeObserver(entries => {
             for (const entry of entries) {
                 const { width, height } = entry.contentRect;
@@ -50,11 +47,17 @@ function ZoneOverlay({ cam }) {
         return () => obs.disconnect();
     }, []);
 
-    React.useEffect(() => {
+    useEffect(() => {
         const canvas = canvasRef.current;
-        if (!canvas || dims.w === 0) return;
-        const ctx = canvas.getContext("2d");
+        if (!canvas || dims.w === 0 || !isArmed) {
+            if (canvas) {
+                const ctx = canvas.getContext("2d");
+                ctx.clearRect(0, 0, dims.w, dims.h);
+            }
+            return;
+        }
 
+        const ctx = canvas.getContext("2d");
         ctx.clearRect(0, 0, dims.w, dims.h);
 
         const zones = cam.ai_server?.zones || [];
@@ -67,51 +70,53 @@ function ZoneOverlay({ cam }) {
             ctx.beginPath();
             const x0 = pts[0][0] > 1 ? pts[0][0] : pts[0][0] * dims.w;
             const y0 = pts[0][1] > 1 ? pts[0][1] : pts[0][1] * dims.h;
-
             ctx.moveTo(x0, y0);
-
             for (let i = 1; i < pts.length; i++) {
                 const x = pts[i][0] > 1 ? pts[i][0] : pts[i][0] * dims.w;
                 const y = pts[i][1] > 1 ? pts[i][1] : pts[i][1] * dims.h;
                 ctx.lineTo(x, y);
             }
+            ctx.closePath();
 
-            ctx.closePath();
-            ctx.closePath();
-            // EXEC-34: High Visibility Armed Zones
-            ctx.fillStyle = "rgba(231, 76, 60, 0.3)"; // Red semi-transparent
-            ctx.strokeStyle = "#e74c3c"; // Red solid
-            ctx.lineWidth = 3;
+            // ANTIGRAVITY: --overlay-style "stroke:2px,fill:rgba(0,255,0,0.15)"
+            ctx.fillStyle = "rgba(0, 255, 0, 0.15)";
+            ctx.strokeStyle = "rgba(0, 255, 0, 0.8)";
+            ctx.lineWidth = 2;
             ctx.fill();
             ctx.stroke();
         };
 
-        zones.forEach(z => {
-            if (z.points) drawZone(z.points);
-        });
-
-    }, [cam, dims]);
+        zones.forEach(z => { if (z.points) drawZone(z.points); });
+    }, [cam, dims, isArmed]);
 
     return (
         <div ref={containerRef} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }}>
-            <canvas
-                ref={canvasRef}
-                width={dims.w}
-                height={dims.h}
-                style={{ width: '100%', height: '100%', display: 'block', background: 'transparent' }}
-            />
+            <canvas ref={canvasRef} width={dims.w} height={dims.h} style={{ width: '100%', height: '100%', display: 'block', background: 'transparent' }} />
         </div>
     );
 }
 
-// --- COMPONENT ---
-function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed, health }) {
+// --- MAIN COMPONENT ---
+function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed, health, isReady, isDegraded, quality = 'sub', isFocused }) {
     const navigate = useNavigate();
     const [hover, setHover] = useState(false);
-    const [quality, setQuality] = useState('hd');
     const [contextMenu, setContextMenu] = useState(null);
 
-    React.useEffect(() => {
+    // Hover Preview Logic
+    const [hoverCount, setHoverCount] = useState(0);
+    useEffect(() => {
+        let t;
+        if (hover && !isMaximized) {
+            t = setInterval(() => setHoverCount(c => c + 1), 1000);
+        } else {
+            setHoverCount(0);
+        }
+        return () => clearInterval(t);
+    }, [hover, isMaximized]);
+
+    const showHoverPreview = hoverCount >= 3;
+
+    useEffect(() => {
         const h = () => setContextMenu(null);
         window.addEventListener('click', h);
         return () => window.removeEventListener('click', h);
@@ -122,159 +127,161 @@ function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed,
         setContextMenu({ x: e.pageX, y: e.pageY });
     };
 
-    const handleMaximise = (e) => {
-        e?.stopPropagation();
-        onMaximise(cam);
-    };
-
-    const handlePlayback = (e) => {
-        e.stopPropagation();
-        navigate(`/playback?camId=${cam.id}`);
-    };
-
     const isRecording = cam.record !== false;
     const isOnline = health ? health.connected : false;
+    const isActuallyHovered = isFocused || showHoverPreview;
+
+    // ANTIGRAVITY: --arming-colors "armed=green,disarmed=gray,alert=red"
+    const getArmingColor = () => {
+        if (isDegraded) return "#e74c3c"; // alert = red
+        if (isArmed) return "#2ecc71";   // armed = green
+        return "#888";                   // disarmed = gray
+    };
 
     return (
-        <div style={containerStyle}
+        <div style={{ ...containerStyle, cursor: isMaximized ? "default" : "pointer" }}
             onMouseEnter={() => setHover(true)}
             onMouseLeave={() => setHover(false)}
             onContextMenu={handleContextMenu}
+            onClick={() => !isMaximized && onMaximise(cam)} // Grid click -> Fullscreen
+            onDoubleClick={(e) => {
+                if (isMaximized) {
+                    e.stopPropagation();
+                    onMaximise(null); // Fullscreen double click -> Close
+                }
+            }}
         >
-            {/* CONTEXT MENU */}
-            {contextMenu && (
-                <div style={{
-                    position: "fixed", top: contextMenu.y, left: contextMenu.x,
-                    background: "#222", border: "1px solid #444", borderRadius: 6,
-                    padding: "4px 0", zIndex: 1000, minWidth: 160,
-                    boxShadow: "0 4px 20px rgba(0,0,0,0.5)"
-                }}>
-                    <div
-                        style={{ padding: "8px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#fff" }}
-                        onMouseEnter={(e) => e.target.style.background = "#333"}
-                        onMouseLeave={(e) => e.target.style.background = "transparent"}
-                        onClick={() => navigate(`/settings?tab=hardware&camId=${cam.id}`)}
-                    >
-                        <Settings size={14} color="#aaa" /> Setări Cameră (HW)
+            {/* VIDEO AREA */}
+            <div style={{ flex: 1, position: "relative", background: "#000", overflow: "hidden" }}>
+                {quality !== 'off' ? (
+                    isMaximized ? (
+                        <MSEPlayer
+                            url={`ws://${window.location.hostname}:1984/api/ws?src=${cam.id}`}
+                            camId={cam.id}
+                        />
+                    ) : (
+                        <DualStreamPlayer
+                            camId={cam.id}
+                            isFullscreen={isMaximized}
+                            isHidden={isHidden}
+                            isHovered={isActuallyHovered}
+                            posterUrl={`/snapshots/${cam.id}.jpg`}
+                            style={{ width: "100%", height: "100%" }}
+                        />
+                    )
+                ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#111', fontSize: 10 }}>
+                        PAUSED
                     </div>
-                    <div
-                        style={{ padding: "8px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#fff" }}
-                        onMouseEnter={(e) => e.target.style.background = "#333"}
-                        onMouseLeave={(e) => e.target.style.background = "transparent"}
-                        onClick={() => navigate(`/settings?tab=channels&camId=${cam.id}`)}
-                    >
-                        <Video size={14} color="#aaa" /> Setări Canal (AI)
+                )}
+
+                {/* UX BADGES / ICONS */}
+                <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 6, zIndex: 10 }}>
+                    {isRecording && (
+                        <div style={{ background: "#e74c3c", color: "#fff", padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: "bold", display: "flex", alignItems: "center", gap: 4 }}>
+                            <Circle size={8} fill="white" /> REC
+                        </div>
+                    )}
+
+                    <div style={{
+                        background: getArmingColor(),
+                        color: "#fff",
+                        padding: "2px 6px",
+                        borderRadius: 4,
+                        fontSize: 10,
+                        fontWeight: "bold",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 4,
+                        boxShadow: (isArmed || isDegraded) ? `0 0 10px ${getArmingColor()}80` : "none"
+                    }}>
+                        <Shield size={10} fill="white" />
+                        {isDegraded ? "ALERTA" : (isArmed ? "ARMAT" : "DEZARMAT")}
                     </div>
-                </div>
-            )}
 
-            {/* VIDEO AREA - SMART DUAL STREAM */}
-            <div style={{ flex: 1, position: "relative", background: "#000", cursor: "pointer", width: "100%" }}
-                onClick={() => !isMaximized && onMaximise(cam)}
-            >
-                <DualStreamPlayer
-                    camId={cam.id}
-                    isFullscreen={isMaximized}
-                    isHovered={hover}
-                    isHidden={isHidden}
-                    posterUrl={`/snapshots/${cam.id}.jpg`}
-                    style={{ width: "100%", height: "100%" }}
-                />
-
-                {/* EXEC-31: ARMING BADGE */}
-                <div style={{
-                    position: 'absolute',
-                    top: 8,
-                    right: 8,
-                    padding: '4px 8px',
-                    background: isArmed ? 'rgba(231, 76, 60, 0.9)' : 'rgba(0, 0, 0, 0.4)',
-                    color: '#fff',
-                    borderRadius: 4,
-                    fontSize: 10,
-                    fontWeight: 'bold',
-                    zIndex: 20,
-                    pointerEvents: 'none',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    boxShadow: isArmed ? '0 0 8px rgba(231, 76, 60, 0.6)' : 'none',
-                    border: isArmed ? '1px solid #c0392b' : '1px solid rgba(255,255,255,0.1)',
-                    transition: 'all 0.3s ease'
-                }}>
-                    <Shield size={12} color={isArmed ? "#fff" : "#aaa"} fill={isArmed ? "#fff" : "none"} />
-                    {isArmed ? 'ARMED' : 'DISARMED'}
+                    {isMaximized && (
+                        <div style={{ background: "rgba(0,0,0,0.6)", color: "#2ecc71", padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: "bold", border: "1px solid #2ecc71" }}>
+                            MAINSTREAM • 15 FPS
+                        </div>
+                    )}
                 </div>
 
-                {/* ZONE OVERLAY */}
-                {isArmed && <ZoneOverlay cam={cam} />}
-
-                {/* OVERLAYS */}
+                {/* INTERACTIVE OVERLAY */}
                 <div style={{
                     position: "absolute", bottom: 0, left: 0, right: 0,
-                    padding: 8,
-                    display: "flex", justifyContent: "space-between", alignItems: "flex-end",
-                    opacity: (hover || isMaximized) ? 1 : 0,
-                    transition: "opacity 0.2s",
-                    pointerEvents: (hover || isMaximized) ? "auto" : "none",
-                    zIndex: 10
+                    padding: "8px", background: "linear-gradient(transparent, rgba(0,0,0,0.95))",
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    opacity: (hover || isMaximized) ? 1 : 0, transition: "opacity 0.2s", zIndex: 20
                 }}>
-                    <div style={{ display: "flex", gap: 4 }}>
-                        <button style={iconBtnStyle} title="View Archive / Playback" onClick={handlePlayback}>
-                            <Archive size={14} />
+                    <span style={{ fontSize: 12, fontWeight: "bold", color: "#fff", textShadow: "0 1px 4px #000" }}>{cam.name || cam.ip}</span>
+                    <div style={{ display: "flex", gap: 6 }}>
+                        <button style={controlBtnStyle} title="Arhivă Video"
+                            onClick={(e) => { e.stopPropagation(); navigate(`/playback?camId=${cam.id}`); }}>
+                            <Archive size={16} />
                         </button>
-                    </div>
 
-                    <div style={{ display: "flex", gap: 4 }}>
-                        <button style={iconBtnStyle} title={isMaximized ? "Minimize" : "Maximize"} onClick={handleMaximise}>
-                            {isMaximized ? <Minimize size={14} /> : <Maximize size={14} />}
+                        <button style={controlBtnStyle} title="Configurare Armare"
+                            onClick={(e) => { e.stopPropagation(); navigate(`/settings?tab=channels&camId=${cam.id}`); }}
+                            onMouseEnter={(e) => e.target.style.background = getArmingColor()}>
+                            <Shield size={16} color="#fff" />
+                        </button>
+
+                        <button style={controlBtnStyle} title={isMaximized ? "Minimizeaza" : "Maximizeaza"}
+                            onClick={(e) => { e.stopPropagation(); onMaximise(isMaximized ? null : cam); }}>
+                            {isMaximized ? <Minimize size={16} /> : <Maximize size={16} />}
                         </button>
                     </div>
                 </div>
-            </div>
 
-            {/* HEADER / STATUS BAR */}
-            <div style={{
-                height: 32, background: isArmed ? "rgba(0, 230, 118, 0.1)" : "#111",
-                borderTop: "1px solid #333",
-                display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 8px"
-            }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, overflow: "hidden" }}>
+                {/* ZONES */}
+                <ZoneOverlay cam={cam} isArmed={isArmed} />
+
+                {/* CONTEXT MENU */}
+                {contextMenu && (
                     <div style={{
-                        width: 10, height: 10, borderRadius: "50%",
-                        background: isOnline ? "#00e676" : "#f44336",
-                        boxShadow: isOnline ? "0 0 8px #00e676" : "none"
-                    }} />
-
-                    <div title={isArmed ? "Armed (AI ON)" : "Disarmed (AI OFF)"}>
-                        <Shield size={16} color={isArmed ? "#00e676" : "#555"} fill={isArmed ? "rgba(0,230,118,0.2)" : "none"} />
-                    </div>
-
-                    <span style={{
-                        fontSize: 13, fontWeight: "600",
-                        color: isArmed ? "#fff" : "#aaa",
-                        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
+                        position: 'fixed',
+                        top: contextMenu.y,
+                        left: contextMenu.x,
+                        background: '#1a1a1a',
+                        border: '1px solid #333',
+                        borderRadius: 4,
+                        padding: '4px 0',
+                        zIndex: 10000,
+                        boxShadow: '0 4px 25px rgba(0,0,0,0.7)',
+                        minWidth: 180
                     }}>
-                        {cam.name || cam.ip}
-                    </span>
-
-                    {isRecording && <div style={{
-                        width: 6, height: 6, borderRadius: "50%", background: "#f44336",
-                        animation: `pulse 1.5s infinite`
-                    }} title="Recording" />}
-                </div>
-
-                <div style={{ fontSize: 9, color: "#444", fontWeight: "bold", letterSpacing: 0.5 }}>
-                    {isMaximized ? "MAIN STREAM" : "SUB STREAM"}
-                </div>
+                        <ContextItem icon={<Archive size={14} />} label="Arhivă Video" onClick={() => navigate(`/playback?camId=${cam.id}`)} />
+                        <ContextItem icon={<SettingsIcon size={14} />} label="Hardware / Dispozitive IP" onClick={() => navigate(`/settings?tab=hardware&camId=${cam.id}`)} />
+                        <ContextItem icon={<Activity size={14} />} label="Setări Canal" onClick={() => navigate(`/settings?tab=channels&camId=${cam.id}`)} />
+                        <ContextItem icon={<Shield size={14} />} label="Meniu Armare" onClick={() => navigate(`/settings?tab=arming&camId=${cam.id}`)} />
+                    </div>
+                )}
             </div>
+        </div>
+    );
+}
 
-            <style>{`
-                @keyframes pulse {
-                    0% { opacity: 1; transform: scale(1); }
-                    50% { opacity: 0.5; transform: scale(1.2); }
-                    100% { opacity: 1; transform: scale(1); }
-                }
-            `}</style>
+function ContextItem({ icon, label, onClick }) {
+    const [hover, setHover] = useState(false);
+    return (
+        <div
+            onMouseEnter={() => setHover(true)}
+            onMouseLeave={() => setHover(false)}
+            onClick={(e) => { e.stopPropagation(); onClick(); }}
+            style={{
+                padding: '10px 14px',
+                color: hover ? '#fff' : '#ccc',
+                background: hover ? '#333' : 'transparent',
+                fontSize: 12,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                transition: 'all 0.1s ease',
+                borderBottom: '1px solid #222'
+            }}
+        >
+            {icon} {label}
         </div>
     );
 }

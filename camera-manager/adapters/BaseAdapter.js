@@ -51,6 +51,14 @@ class BaseAdapter {
     async getDeviceInfo() {
         return { manufacturer: this.config.manufacturer };
     }
+
+    /**
+     * Apply configuration to the physical device (VMS style)
+     * @param {object} config 
+     */
+    async applyDeviceConfig(config) {
+        throw new Error('Method applyDeviceConfig() must be implemented');
+    }
 }
 
 module.exports = BaseAdapter;

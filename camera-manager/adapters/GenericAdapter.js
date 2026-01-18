@@ -3,7 +3,6 @@ const onvif = require('node-onvif');
 
 class GenericAdapter extends BaseAdapter {
     async connect() {
-        const fs = require('fs');
         try {
             console.log(`[GenericAdapter] Connecting via ONVIF to ${this.config.ip}...`);
 
@@ -20,18 +19,17 @@ class GenericAdapter extends BaseAdapter {
             await Promise.race([this.device.init(), timeout]);
 
             console.log(`[GenericAdapter] ONVIF Init Success for ${this.config.ip}`);
+            this.connected = true;
 
             // Fetch Profiles & Stream URIs
             let profiles = [];
             try { profiles = this.device.getProfiles(); } catch (e) { }
-            console.log(`[GenericAdapter] Found ${profiles.length} profiles for ${this.config.ip}`);
 
             if (profiles.length > 0) {
                 // Try to get URL for the first profile (usually Main Stream)
                 try {
                     let rawUrl = await this.device.getUdpStreamUrl();
                     if (!rawUrl) {
-                        // Try secondary method if getUdpStreamUrl failed
                         const firstProfile = profiles[0].token;
                         rawUrl = await this.device.services.media.getStreamUri({
                             ProfileToken: firstProfile,
@@ -41,14 +39,11 @@ class GenericAdapter extends BaseAdapter {
 
                     if (rawUrl) {
                         this.streamUrl = rawUrl.replace(/"/g, '').trim();
-                        console.log(`[GenericAdapter] Discovered Stream URL: ${this.streamUrl}`);
                     }
-                } catch (urlErr) {
-                    console.warn(`[GenericAdapter] Failed to fetch stream URL: ${urlErr.message}`);
-                }
+                } catch (urlErr) { }
             }
 
-            // TIME SYNC FIX
+            // ENTERPRISE: Time Sync on Connect
             try {
                 const now = new Date();
                 await this.device.services.device.setSystemDateAndTime({
@@ -64,30 +59,19 @@ class GenericAdapter extends BaseAdapter {
             return true;
         } catch (e) {
             console.warn(`[GenericAdapter] ONVIF Connection Failed for ${this.config.ip}: ${e.message}`);
-            // Return true regarding adapter creation success, so we can fall back to RTSP URL if provided manually
-            // But we should mark it as failed probing if we rely purely on ONVIF. 
-            // Existing logic returns true, which means "Adapter Ready". 
-            // If ONVIF fails, we will rely on getStreamUri's heuristic fallback.
-            return true;
+            return true; // Return true to allow RTSP fallback in factory
         }
     }
 
     async getStreamUri(channelId = '101') {
         const isSub = (channelId === '102' || channelId === '2');
-        // First, if explicit RTSP URLs are provided in config (Trassir case), return them
         if (this.config) {
-            if (!isSub && this.config.rtspHd) {
-                return this.config.rtspHd;
-            }
-            if (isSub && this.config.rtsp) {
-                return this.config.rtsp;
-            }
+            if (!isSub && this.config.rtspHd) return this.config.rtspHd;
+            if (isSub && this.config.rtsp) return this.config.rtsp;
         }
-        if (this.streamUrl && this.streamUrl.length > 5 && !isSub) {
-            return this.streamUrl;
-        }
+        if (this.streamUrl && !isSub) return this.streamUrl;
 
-        // HEURISTIC FALLBACK: Guessed patterns based on manufacturer hints
+        // HEURISTIC FALLBACK
         const manuf = (this.config.manufacturer || '').toLowerCase();
         if (manuf.includes('dahua')) {
             const subtype = isSub ? 1 : 0;
@@ -97,25 +81,74 @@ class GenericAdapter extends BaseAdapter {
             const chan = isSub ? 102 : 101;
             return `rtsp://${this.config.user}:${this.config.pass}@${this.config.ip}:554/Streaming/Channels/${chan}`;
         }
-        if (manuf.includes('trassir')) {
-            const stream = isSub ? 'sub' : 'main';
-            return `rtsp://${this.config.user}:${this.config.pass}@${this.config.ip}:554/live/${stream}`;
-        }
-
         return this.config.rtsp || "";
     }
-    // Duplicate stray code removed
-    // stray brace removed
+
+    /**
+     * ENTERPRISE: Write config to camera via ONVIF
+     * Supports: codec, resolution, fps, gop
+     */
+    async applyDeviceConfig(newConfig) {
+        if (!this.device || !this.device.services.media) {
+            throw new Error("ONVIF Device not initialized or Media service missing");
+        }
+
+        try {
+            const profiles = this.device.getProfiles();
+            if (profiles.length === 0) throw new Error("No profiles found on device");
+
+            // We apply to the first profile (Main)
+            const mainProfile = profiles[0];
+            const videoConfig = mainProfile.VideoEncoderConfiguration;
+            if (!videoConfig) throw new Error("No VideoEncoderConfiguration found for main profile");
+
+            const params = {
+                ConfigurationToken: videoConfig.token,
+                ForcePersistence: true,
+                Configuration: {
+                    ...videoConfig
+                }
+            };
+
+            // Map scope changes
+            if (newConfig.codec) params.Configuration.Encoding = newConfig.codec; // e.g. 'H264'
+            if (newConfig.fps) params.Configuration.RateControl.FrameRateLimit = parseInt(newConfig.fps);
+            if (newConfig.gop) params.Configuration.H264.GovLength = parseInt(newConfig.gop);
+            if (newConfig.resolution) {
+                const [w, h] = newConfig.resolution.split('x');
+                params.Configuration.Resolution = { Width: parseInt(w), Height: parseInt(h) };
+            }
+
+            console.log(`[GenericAdapter] Applying ONVIF SetVideoEncoderConfiguration to ${this.config.ip}`);
+            await this.device.services.media.setVideoEncoderConfiguration(params);
+            return true;
+        } catch (e) {
+            console.error(`[GenericAdapter] Failed to apply ONVIF config: ${e.message}`);
+            throw e;
+        }
+    }
 
     async getDeviceInfo() {
         let model = 'Generic ONVIF';
         let manufacturer = this.config.manufacturer || 'Generic';
+        let videoParams = {};
 
         if (this.device) {
             try {
                 const info = this.device.getInformation();
                 if (info.Model) model = info.Model;
                 if (info.Manufacturer) manufacturer = info.Manufacturer;
+
+                const profiles = this.device.getProfiles();
+                if (profiles.length > 0 && profiles[0].VideoEncoderConfiguration) {
+                    const c = profiles[0].VideoEncoderConfiguration;
+                    videoParams = {
+                        codec: c.Encoding,
+                        resolution: `${c.Resolution.Width}x${c.Resolution.Height}`,
+                        fps: c.RateControl.FrameRateLimit,
+                        gop: c.H264?.GovLength || 0
+                    };
+                }
             } catch (e) { }
         }
 
@@ -126,7 +159,8 @@ class GenericAdapter extends BaseAdapter {
             streams: {
                 main: await this.getStreamUri('101'),
                 sub: await this.getStreamUri('102')
-            }
+            },
+            params: videoParams
         };
     }
 }
