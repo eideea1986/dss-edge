@@ -18,29 +18,55 @@ const app = express();
 const PORT = 8080;
 
 // --- TELEMETRY WEBSOCKET (DISABLED) ---
-/*
+// --- EVENT HUB WEBSOCKET (EXEC-32) ---
 const WebSocket = require('ws');
-const wss = new WebSocket.Server({ port: 8090 });
-const playbackClients = new Map();
+/* EXEC-32: WebSocket on 8090 for Real-Time Updates */
+let wss;
+try {
+    wss = new WebSocket.Server({ port: 8090 });
+    console.log("[WS] Real-Time Event Server running on port 8090");
+} catch (e) {
+    console.error("[WS] Failed to start WebSocket server:", e);
+}
 
-wss.on('connection', (ws) => {
-    ws.on('message', (msg) => {
-        try {
-            const data = JSON.parse(msg);
-            if (data.type === 'subscribe') {
-                ws.camId = data.camId;
-                console.log(`[WS] Client subscribed to ${ws.camId}`);
-            }
-        } catch (e) { }
+// Broadcast helper for EXEC-32 logic
+app.broadcastEvent = (type, payload) => {
+    if (!wss) return;
+    const msg = JSON.stringify({ type, ...payload, ts: Date.now() });
+
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(msg);
+        }
     });
-    ws.on('close', () => { });
-});
-*/
-
-// Global bridge function (STUB)
-app.sendPlaybackTelemetry = (camId, absTs) => {
-    // Disabled
+    console.log(`[WS] Broadcast: ${type}`);
 };
+
+if (wss) {
+    wss.on('connection', (ws) => {
+        console.log(`[WS] Client Connected (${wss.clients.size} total)`);
+
+        // Send initial sync event?
+        // Maybe later.
+
+        ws.on('close', () => console.log("[WS] Client Disconnected"));
+        ws.on('error', (e) => console.error("[WS] Client Error:", e.message));
+    });
+}
+
+// --- ARMING STATE WATCHER (EXEC-32) ---
+const redisEventSub = new Redis();
+redisEventSub.subscribe("arming:changed", (err) => {
+    if (err) console.error("[Redis] Subscription Error:", err.message);
+});
+redisEventSub.on("message", (channel, message) => {
+    if (channel === "arming:changed") {
+        try {
+            const data = JSON.parse(message);
+            app.broadcastEvent('ARMING_STATE_CHANGED', data);
+        } catch (e) { }
+    }
+});
 
 // --- PROXY DEFINITIONS ---
 // --- SNAPSHOTS ---
@@ -79,36 +105,238 @@ setInterval(() => {
     redis.set("hb:legacy-api", Date.now());
 }, 2000);
 
+// --- FUNCTIONAL PROOF HELPERS ---
+const getSnapshotFreshness = () => {
+    try {
+        const dir = path.resolve(__dirname, "../recorder/ramdisk/snapshots");
+        if (!fs.existsSync(dir)) return { valid: 0, total: 0, oldest: 0, newest: 0 };
+
+        const files = fs.readdirSync(dir).filter(f => f.endsWith('.jpg'));
+        const now = Date.now();
+        let valid = 0;
+
+        files.forEach(f => {
+            try {
+                const stats = fs.statSync(path.join(dir, f));
+                const age = now - stats.mtimeMs;
+                if (age < 15000) valid++; // 15s threshold for "Live"
+            } catch (e) { }
+        });
+
+        return { valid, total: files.length };
+    } catch (e) { return { valid: 0, total: 0 }; }
+};
+
+const getRecordingFreshness = async (redis) => {
+    try {
+        const lastWrites = await redis.hgetall("recorder:last_write");
+        const now = Date.now();
+        let active = 0;
+        let total = 0;
+
+        for (const [camId, ts] of Object.entries(lastWrites)) {
+            total++;
+            if ((now - Number(ts)) < 40000) active++; // 40s tolerance (segments are ~10s+processing)
+        }
+        return { active, total };
+    } catch (e) { return { active: 0, total: 0 }; }
+};
+
 app.get("/api/system/health", async (req, res) => {
     try {
+        const now = Date.now();
         const globalState = await redis.get("global:state") || "UNKNOWN";
-        const liveState = await redis.get("state:live");
+        const warnings = [];
 
-        // Collect all heartbeats
-        const services = ["recorder", "live", "indexer", "retention", "legacy-api"];
-        const health = {};
+        // --- 1. GATHER PROOFS ---
+        const snapshots = getSnapshotFreshness();
+        const recordings = await getRecordingFreshness(redis);
+        const hbRec = await redis.get("hb:recorder");
+        const hbIdx = await redis.get("hb:indexer");
+        const indexReady = fs.existsSync("/run/dss/index.ready");
+        const configExists = fs.existsSync("/opt/dss-edge/config/cameras.json");
+        const armingStateStr = await redis.get("state:arming");
+        const hbLive = await redis.get("hb:live");
+        const wg0 = await redis.get("state:vpn:wg0");
+        const wg1 = await redis.get("state:vpn:wg1");
 
-        for (const s of services) {
-            const ts = await redis.get(`hb:${s}`);
-            const drift = ts ? Date.now() - Number(ts) : -1;
-            health[s] = {
-                status: (drift !== -1 && drift < 12000) ? "OK" : "FAIL",
-                lastSeenMs: drift
-            };
+        // --- 2. EVALUATE MODULES (FUNCTIONAL TRUTH) ---
+        const nvr = {
+            connection: { status: "UNKNOWN", details: "" },
+            recording: { status: "UNKNOWN", details: "" },
+            playback: { status: "UNKNOWN", details: "" },
+            config: { status: "UNKNOWN", details: "" },
+            arming: { status: "UNKNOWN", details: "" },
+            live_grid: { status: "UNKNOWN", details: "" },
+            live_main: { status: "UNKNOWN", details: "" },
+            system: { status: "UNKNOWN", details: "" },
+            vpn: { status: "UNKNOWN", details: "" }
+        };
+
+        // ... (Connection/Recording/Grid checks remain same, omitted for brevity in diff but required in replacement if overlapping) ...
+        // Re-implementing Connection/Recording checks for context since Replace needs contiguous block? No, I can use "startLine/EndLine" or rely on context match.
+        // I will replace the block from "const hbIdx..." down to the end of evaluations.
+
+        // Connection & Live Grid (Proof: Fresh Snapshots)
+        if (snapshots.valid > 0) {
+            nvr.connection.status = "OK";
+            nvr.live_grid.status = "OK";
+            nvr.details = `${snapshots.valid} active cameras`;
+        } else {
+            nvr.connection.status = "FAIL";
+            nvr.live_grid.status = "FAIL";
+            warnings.push("No active camera frames detected");
+        }
+
+        // Recording (Proof: Fresh Writes)
+        if (recordings.active > 0) {
+            nvr.recording.status = "OK";
+            nvr.recording.details = `${recordings.active} active writers`;
+        } else {
+            const recDrift = hbRec ? now - Number(hbRec) : -1;
+            if (recDrift !== -1 && recDrift < 15000) {
+                nvr.recording.status = "DEGRADED"; // Service running, no writes
+                warnings.push("Recorder running but no data written to disk");
+            } else {
+                nvr.recording.status = "FAIL"; // Service dead
+                warnings.push("Recorder service unresponsive");
+            }
+        }
+
+        // Playback (Proof: Index Ready + Service)
+        if (hbIdx && (now - Number(hbIdx) < 15000)) {
+            if (indexReady) {
+                nvr.playback.status = "OK";
+            } else {
+                nvr.playback.status = "DEGRADED_INDEX"; // EXPLICIT CODE
+                warnings.push("Index rebuilding/not ready");
+            }
+        } else {
+            nvr.playback.status = "FAIL";
+            warnings.push("Indexer service unresponsive");
+        }
+
+        // Config
+        nvr.config.status = configExists ? "OK" : "FAIL";
+
+        // Arming (LIVE TRUTH from Service - IMPLACABLE MODE)
+        let armingDetail = "UNKNOWN";
+        if (armingStateStr) {
+            try {
+                const armingState = JSON.parse(armingStateStr);
+                const armDrift = now - (armingState.timestamp || 0);
+
+                // IMPLACABLE: Validate 'armed' field exists and is boolean
+                if (typeof armingState.armed !== 'boolean') {
+                    nvr.arming.status = "FAIL";
+                    armingDetail = "UNKNOWN";
+                    warnings.push("Arming state UNKNOWN - system is unsafe for security monitoring");
+                } else if (armDrift < 15000) {
+                    nvr.arming.status = "OK";
+                    armingDetail = armingState.armed ? "ARMED" : "DISARMED";
+                    nvr.arming.details = armingDetail;
+                } else {
+                    nvr.arming.status = "FAIL";
+                    warnings.push("Arming state is stale - cannot verify arming status");
+                }
+            } catch (e) {
+                nvr.arming.status = "FAIL";
+                warnings.push("Arming data corrupted - system unsafe");
+            }
+        } else {
+            nvr.arming.status = "FAIL";
+            warnings.push("Arming service unreachable - system cannot be armed/disarmed");
+        }
+
+        // Live Main (Inferred from Connection)
+        nvr.live_main.status = nvr.connection.status;
+
+        // System (API is running)
+        nvr.system.status = "OK";
+
+        // VPN
+        if (wg0 === "UP" && wg1 === "UP") nvr.vpn.status = "OK";
+        else if (wg0 === "UP" || wg1 === "UP") nvr.vpn.status = "DEGRADED";
+        else nvr.vpn.status = "FAIL";
+
+        // --- 3. ENTERPRISE CERTIFICATION GATE ---
+
+        // CRITICAL MODULES (ZERO TOLERANCE)
+        const CRITICAL_MODULES = ['connection', 'recording', 'arming', 'system', 'vpn'];
+
+        // Count failures by severity
+        const criticalFailures = CRITICAL_MODULES.filter(m => nvr[m].status === "FAIL");
+        const criticalDegraded = CRITICAL_MODULES.filter(m => nvr[m].status === "DEGRADED");
+        const allFailures = Object.keys(nvr).filter(m => nvr[m].status === "FAIL");
+        const allDegraded = Object.keys(nvr).filter(m => nvr[m].status === "DEGRADED");
+
+        // STRICT CERTIFICATION LOGIC
+        let safetyState = "SAFE";
+        let nvrCapable = true;
+
+        // RULE 1: ANY critical module FAIL → UNSAFE, NOT CAPABLE
+        if (criticalFailures.length > 0) {
+            safetyState = "UNSAFE";
+            nvrCapable = false;
+            warnings.unshift(`CRITICAL: ${criticalFailures.map(m => nvr[m].details || m).join(', ')} failed. System is unsafe.`);
+        }
+        // RULE 2: ANY critical module DEGRADED → UNSAFE, NOT CAPABLE (ZERO TOLERANCE)
+        else if (criticalDegraded.length > 0) {
+            safetyState = "UNSAFE";  // Changed from DEGRADED to UNSAFE for critical modules
+            nvrCapable = false;
+
+            // User-friendly warnings
+            if (criticalDegraded.includes('recording')) {
+                warnings.unshift("Recording cannot be guaranteed - system is not safe for security monitoring.");
+            }
+            if (criticalDegraded.includes('arming')) {
+                warnings.unshift("Arming state is unreliable - system is unsafe.");
+            }
+            if (criticalDegraded.includes('connection')) {
+                warnings.unshift("Camera connections are unstable - system is not reliable.");
+            }
+            if (criticalDegraded.includes('vpn')) {
+                warnings.unshift("VPN connection is unstable - remote access or AI services may be impacted.");
+            }
+        }
+        // RULE 3: Non-critical modules degraded → DEGRADED (informational)
+        else if (allDegraded.length > 0) {
+            safetyState = "DEGRADED";
+            nvrCapable = false; // Still not certifiable
+        }
+
+        // RULE 4: Connection minimum threshold (enterprise requires meaningful coverage)
+        if (nvr.connection.status === "OK" && snapshots.valid < 5) {
+            nvr.connection.status = "DEGRADED";
+            warnings.push("Insufficient active cameras for enterprise operation (minimum: 5).");
+            safetyState = "UNSAFE";
+            nvrCapable = false;
         }
 
         res.json({
+            nvr_capable: nvrCapable,
+            safety_state: safetyState,
             system: globalState,
-            modules: health,
-            disk: await redis.get("hb:disk_usage") || 0,
-            vpn: {
-                dispatch: (await redis.get("state:vpn:wg0")) === "UP" ? "OK" : "FAIL",
-                ai: (await redis.get("state:vpn:wg1")) === "UP" ? "OK" : "FAIL"
+            warnings: warnings,
+            modules: nvr,
+            arming_state: armingStateStr ? JSON.parse(armingStateStr) : null,
+
+            // CERTIFICATION METRICS
+            certification: {
+                critical_modules_ok: CRITICAL_MODULES.every(m => nvr[m].status === "OK"),
+                critical_failures: criticalFailures,
+                critical_degraded: criticalDegraded,
+                enterprise_ready: nvrCapable && safetyState === "SAFE"
             },
-            streams: liveState ? JSON.parse(liveState) : []
+
+            // Telemetry
+            disk: await redis.get("hb:disk_usage") || 0,
+            vpn: { dispatch: wg0 === "UP" ? "OK" : "FAIL", ai: wg1 === "UP" ? "OK" : "FAIL" },
+            timestamp: new Date().toISOString()
         });
+
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: e.message, safety_state: "UNSAFE" });
     }
 });
 
@@ -231,121 +459,43 @@ app.delete("/api/cameras/config/:id", emergencyDelete);
 app.delete("/cameras/:id", emergencyDelete);
 
 
-// --- API ROUTES ---
+// --- 1. API ROUTES FIRST ---
 const cameraRoutes = require("./routes/cameras");
-app.use("/cameras", cameraRoutes);
 app.use("/api/cameras", cameraRoutes);
+app.use("/cameras", cameraRoutes);
 
 const eventRoutes = require("./routes/events");
-app.use("/events", eventRoutes);
 app.use("/api/events", eventRoutes);
+app.use("/events", eventRoutes);
 
 const statusRoutes = require("./routes/status");
-app.use("/status", statusRoutes);
 app.use("/api/status", statusRoutes);
+app.use("/status", statusRoutes);
 
 const networkRoutes = require("./routes/network");
-app.use("/network", networkRoutes);
 app.use("/api/network", networkRoutes);
-
-const tunnelRoutes = require("./routes/tunnel");
-app.use("/tunnel", tunnelRoutes);
-app.use("/api/tunnel", tunnelRoutes);
+app.use("/network", networkRoutes);
 
 const vpnRoutes = require("./routes/vpn");
-app.use("/vpn", vpnRoutes);
 app.use("/api/vpn", vpnRoutes);
-
-const discoveryRoutes = require("./routes/discovery");
-app.use("/discovery", discoveryRoutes);
-app.use("/api/discovery", discoveryRoutes);
+app.use("/vpn", vpnRoutes);
 
 const systemRoutes = require("./routes/system");
-app.use("/system", systemRoutes);
 app.use("/api/system", systemRoutes);
-
-const dispatchRoutes = require("./routes/dispatch");
-app.use("/dispatch", dispatchRoutes);
-app.use("/api/dispatch", dispatchRoutes);
-
-const recorderRouter = require("./routes/recorder");
-recorderRouter.telemetryBridge = (camId, absTs) => app.sendPlaybackTelemetry(camId, absTs);
-app.use("/recorder", recorderRouter);
-app.use("/api/recorder", recorderRouter);
+app.use("/system", systemRoutes);
 
 const playbackRoutes = require("./routes/playback");
-app.use("/playback", playbackRoutes);
 app.use("/api/playback", playbackRoutes);
+app.use("/playback", playbackRoutes);
 
-// Serve HLS playback files
-app.use("/playback-hls", express.static("/tmp/playback-hls"));
-
-const streamDelayRoutes = require("./routes/stream_delay");
-app.use("/stream-delay", streamDelayRoutes);
-app.use("/api/stream-delay", streamDelayRoutes);
+const armingStateRoutes = require("./routes/arming-state");
+app.use("/api/arming-state", armingStateRoutes);
 
 const armingRoutes = require("./routes/arming");
-app.use("/arming", armingRoutes);
 app.use("/api/arming", armingRoutes);
+app.use("/arming", armingRoutes);
 
-const modelsRoutes = require("./routes/models");
-app.use("/models", modelsRoutes);
-app.use("/api/models", modelsRoutes);
-
-const pushRoutes = require("./routes/push");
-app.use("/push", pushRoutes);
-app.use("/api/push", pushRoutes);
-
-const authRoutes = require("./routes/auth");
-app.use("/auth", authRoutes);
-app.use("/api/auth", authRoutes);
-
-const deviceConfigRoutes = require("./routes/device_config");
-app.use("/device-config", deviceConfigRoutes);
-app.use("/api/device-config", deviceConfigRoutes);
-
-const aiRoutes = require("./routes/ai");
-app.use("/ai", aiRoutes);
-app.use("/api/ai", aiRoutes);
-
-const aiIntelligenceRoutes = require("./routes/ai-intelligence");
-app.use("/ai-intelligence/api", aiIntelligenceRoutes);
-
-// Internal Motion Trigger from standalone Recorder
-const aiRouter = require("./services/aiRequest");
-require("./services/eventManager"); // Initialize Event State Machine listener
-app.post("/internal/motion", (req, res) => {
-    const { cameraId, type } = req.body;
-    if (cameraId && type === 'motion_start') {
-        aiRouter.handleMotion(cameraId).catch(err => console.error("[AI-Router] Error:", err));
-    }
-    res.sendStatus(200);
-});
-
-// --- PROXY HANDLERS ---
-
-// Serve Recorder Segments (for HLS Live-from-Recordings & Analytics)
-const RECORDER_SEGMENTS = path.resolve(__dirname, "../recorder/segments");
-app.use("/recorder/live", express.static(RECORDER_SEGMENTS, {
-    setHeaders: (res, filePath) => {
-        res.setHeader("Access-Control-Allow-Origin", "*");
-        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        if (filePath.endsWith(".m3u8")) res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
-        if (filePath.endsWith(".m4s")) res.setHeader("Content-Type", "video/iso.segment");
-        if (filePath.endsWith(".mp4")) res.setHeader("Content-Type", "video/mp4");
-        if (filePath.endsWith(".ts")) res.setHeader("Content-Type", "video/mp2t");
-    }
-}));
-
-// MJPEG Stream Proxy (Camera Manager)
-app.use("/stream", (req, res) => {
-    req.url = req.originalUrl;
-    streamProxy.web(req, res, { ignorePath: false }, (e) => {
-        if (!res.headersSent) res.sendStatus(502);
-    });
-});
-
-// Go2RTC Proxy (API & WebRTC)
+// --- 2. PROXIES ---
 app.use("/rtc", (req, res) => {
     req.url = req.url.replace(/^\/rtc/, '') || '/';
     rtcProxy.web(req, res, (e) => {
@@ -353,38 +503,33 @@ app.use("/rtc", (req, res) => {
     });
 });
 
-// --- STATIC UI ---
-// --- STATIC UI ---
+app.use("/stream", (req, res) => {
+    req.url = req.originalUrl;
+    streamProxy.web(req, res, { ignorePath: false }, (e) => {
+        if (!res.headersSent) res.sendStatus(502);
+    });
+});
+
+// --- 3. FRONTEND LAST ---
 const uiBuildPath = path.join(__dirname, "../local-ui/build");
 if (fs.existsSync(uiBuildPath)) {
-
-    // 1. FORCE NO-CACHE for index.html (Vital for updates)
-    app.get(['/', '/index.html'], (req, res) => {
-        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
-        res.setHeader('Surrogate-Control', 'no-store');
-        res.sendFile(path.join(uiBuildPath, "index.html"));
-    });
-
-    // 2. Serve other static assets (js, css, images) - these have hashes, so cache is fine
+    // Serve static files
     app.use(express.static(uiBuildPath, {
         setHeaders: (res, path) => {
-            // Double safety: if somehow index.html is requested via static middleware
             if (path.endsWith("index.html")) {
                 res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
             } else {
-                // Hashed assets
                 res.setHeader('Cache-Control', 'public, max-age=31536000');
             }
         }
     }));
 
-    app.get("*", (req, res, next) => {
-        const apiPrefixes = ["/cameras", "/events", "/status", "/vpn", "/auth", "/dispatch", "/recorder", "/arming", "/models", "/rtc", "/stream", "/playback", "/api"];
-        if (apiPrefixes.some(p => req.path.startsWith(p))) return next();
-
-        // SPA Fallback -> index.html (No Cache)
+    // SPA FALLBACK
+    app.get("*", (req, res) => {
+        // If it looks like an API call but reached here, it's a 404
+        if (req.path.startsWith('/api/') || req.path.startsWith('/playback/') || req.path.startsWith('/rtc/')) {
+            return res.status(404).send("API Not Found");
+        }
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.sendFile(path.join(uiBuildPath, "index.html"));
     });

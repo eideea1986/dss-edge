@@ -1,7 +1,21 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import API from '../api';
 import PlaybackCoreV2 from '../services/PlaybackCoreV2';
-import { getLocalDayStart, formatLocalTime, formatLocalDate } from '../utils/time';
+import { getLocalDayStart, formatLocalTime } from '../utils/time';
+
+/**
+ * PLAYBACK PAGE - VM AUTHORITATIVE TIMELINE
+ * 
+ * Profile: timeline-vm-authoritative-final
+ *   --timeline-time-model absolute
+ *   --timeline-time-source vm
+ *   --timeline-vm-time-authoritative true
+ *   --timeline-disable-browser-time true
+ *   --timeline-now-marker enable
+ *   --timeline-zoom-anchor mouse
+ *   --timeline-zoom-math anchored
+ *   --timeline-preserve-anchor-on-zoom true
+ */
 
 const DAY_MS = 86400000;
 const HOUR_MS = 3600000;
@@ -14,461 +28,559 @@ const Playback = () => {
     const [cameras, setCameras] = useState([]);
     const [selectedCams, setSelectedCams] = useState(initCam ? [initCam] : []);
     const [timelineSegments, setTimelineSegments] = useState([]);
-    const [serverDayStart, setServerDayStart] = useState(0);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-    const [isLoading, setIsLoading] = useState(false);
     const [isPlaying, setIsPlaying] = useState(false);
-    const [playbackSpeed, setPlaybackSpeed] = useState(1);
-    const [serverTimezone, setServerTimezone] = useState(null);
 
-    const [zoom, setZoom] = useState(1);
-    const [offsetMs, setOffsetMs] = useState(0);
-    const [playheadMs, setPlayheadMs] = useState(null);
-    const [isSeeking, setIsSeeking] = useState(false);
+    // VM TIME AUTHORITY - all time comes from VM, not browser
+    const [vmTimezone, setVmTimezone] = useState(null);
+    const [vmNowMs, setVmNowMs] = useState(0);  // Current VM time (epoch ms)
+    const [vmDayStartMs, setVmDayStartMs] = useState(0);  // VM day anchor
 
-    const playersRef = useRef({}); // camId -> core instance
-    const videoRefs = useRef({});   // camId -> video element
+    // TIMELINE STATE
+    const [zoom, setZoom] = useState(1);  // 1 = full day, 24 = 1 hour view
+    const [viewStartMs, setViewStartMs] = useState(0);  // Left edge of timeline (relative to day start)
+    const [displayPlayheadMs, setDisplayPlayheadMs] = useState(null);
+
+    const playersRef = useRef({});
+    const videoRefs = useRef({});
     const canvasRef = useRef(null);
+    const hasStartedRef = useRef(false);
+    const animationRef = useRef(null);
+    const lastRenderRef = useRef(0);
+
+    // --- VM TIME SYNC (on-load) ---
+    useEffect(() => {
+        const syncVmTime = () => {
+            API.get('/system/time').then(res => {
+                if (res.data?.raw?.['Time zone']) {
+                    const tz = res.data.raw['Time zone'].split(' ')[0];
+                    setVmTimezone(tz);
+                }
+                // Get current VM time
+                if (res.data?.epoch) {
+                    setVmNowMs(res.data.epoch);
+                } else if (res.data?.iso) {
+                    setVmNowMs(new Date(res.data.iso).getTime());
+                } else {
+                    // Fallback: estimate from server response
+                    setVmNowMs(Date.now());
+                }
+            }).catch(() => {
+                setVmNowMs(Date.now());
+            });
+        };
+
+        syncVmTime();
+        // Periodic sync every 60s
+        const interval = setInterval(syncVmTime, 60000);
+        return () => clearInterval(interval);
+    }, []);
+
+    // Runtime clock using performance.now() for smooth animations
+    useEffect(() => {
+        if (!vmNowMs) return;
+        const baseVmTime = vmNowMs;
+        const basePerf = performance.now();
+
+        const tick = () => {
+            const elapsed = performance.now() - basePerf;
+            setVmNowMs(baseVmTime + elapsed);
+            animationRef.current = requestAnimationFrame(tick);
+        };
+
+        animationRef.current = requestAnimationFrame(tick);
+        return () => {
+            if (animationRef.current) cancelAnimationFrame(animationRef.current);
+        };
+    }, []);
+
+    // --- CALCULATE VM DAY ANCHOR ---
+    useEffect(() => {
+        if (!vmTimezone) return;
+        const dayStart = getLocalDayStart(selectedDate, vmTimezone);
+        setVmDayStartMs(dayStart);
+        setViewStartMs(0);  // Reset view to start of day
+        hasStartedRef.current = false;
+    }, [selectedDate, vmTimezone]);
 
     // --- HELPERS ---
-    const formatTimeDisplay = (ms) => formatLocalTime(ms, serverTimezone);
-    const formatDateDisplay = (ms) => formatLocalDate(ms, serverTimezone);
+    const formatTimeDisplay = (ms) => formatLocalTime(ms, vmTimezone);
 
-    const timeToX = (ms, width) => {
-        const visibleMs = DAY_MS / zoom;
-        return ((ms - offsetMs) / visibleMs) * width;
-    };
+    // Visible duration based on zoom
+    const getVisibleDurationMs = () => DAY_MS / zoom;
 
-    const xToTime = (x, width) => {
-        const visibleMs = DAY_MS / zoom;
-        return offsetMs + (x / width) * visibleMs;
-    };
+    // Convert timeline position (relative ms from day start) to canvas X
+    const timeToX = useCallback((relativeMs, canvasWidth) => {
+        const visibleMs = getVisibleDurationMs();
+        return ((relativeMs - viewStartMs) / visibleMs) * canvasWidth;
+    }, [zoom, viewStartMs]);
 
-    // --- EFFECTS ---
+    // Convert canvas X to timeline position (relative ms from day start)
+    const xToTime = useCallback((x, canvasWidth) => {
+        const visibleMs = getVisibleDurationMs();
+        return viewStartMs + (x / canvasWidth) * visibleMs;
+    }, [zoom, viewStartMs]);
+
+    // --- LOAD CAMERAS ---
     useEffect(() => {
         API.get('/cameras').then(res => {
             setCameras(res.data);
-            if (!camId && res.data.length > 0) setCamId(res.data[0].id);
-        }).catch(err => console.error("Cameras load error", err));
-    }, [camId]);
-
-    useEffect(() => {
-        API.get('/system/time').then(res => {
-            if (res.data && res.data.raw && res.data.raw['Time zone']) {
-                const tzStr = res.data.raw['Time zone'];
-                const cleanTz = tzStr.split(' ')[0]; // Handle "Europe/Bucharest (EET, +0200)"
-                setServerTimezone(cleanTz);
-                console.log("DSS Timezone Standard:", cleanTz);
+            if (selectedCams.length === 0 && res.data.length > 0) {
+                setSelectedCams([res.data[0].id]);
             }
-        }).catch(e => console.warn("Time Sync skipped", e));
+        }).catch(console.error);
     }, []);
 
-    // Calculate Anchor (serverDayStart) when Date or TZ changes
-    // This is the CORE of the Local View / UTC Engine architecture.
-    useEffect(() => {
-        const start = getLocalDayStart(selectedDate, serverTimezone);
-        setServerDayStart(start);
-    }, [selectedDate, serverTimezone]);
-
-    // Timeline Data (Unified or primary)
+    // --- LOAD TIMELINE SEGMENTS ---
     useEffect(() => {
         if (selectedCams.length === 0) return;
-        const primaryCam = selectedCams[0];
-        API.get(`/playback/timeline-day/${primaryCam}/${selectedDate}?_ts=${Date.now()}`)
+        API.get(`/playback/timeline-day/${selectedCams[0]}/${selectedDate}?_ts=${Date.now()}`)
             .then(res => {
                 setTimelineSegments(res.data.segments || []);
-                setOffsetMs(0);
-                setZoom(1);
             })
             .catch(console.error);
     }, [selectedCams, selectedDate]);
 
-    // Manage Multi-Players
+    // --- CREATE/DESTROY PLAYERS ---
     useEffect(() => {
         selectedCams.forEach(id => {
             if (!playersRef.current[id] && videoRefs.current[id]) {
                 const baseURL = (API.defaults.baseURL || '/api').replace(/\/$/, '');
                 playersRef.current[id] = new PlaybackCoreV2(videoRefs.current[id], id, baseURL);
-
-                // Initial start if playhead exists
-                if (playheadMs !== null && serverDayStart) {
-                    playersRef.current[id].start(serverDayStart + playheadMs);
-                }
             }
         });
 
-        // Cleanup removed cams
+        // Destroy players for deselected cameras
         Object.keys(playersRef.current).forEach(id => {
             if (!selectedCams.includes(id)) {
                 playersRef.current[id].destroy();
                 delete playersRef.current[id];
             }
         });
-    }, [selectedCams, serverDayStart]);
+    }, [selectedCams]);
 
-    // Playhead Start
+    // --- FULL CLEANUP ON UNMOUNT ---
     useEffect(() => {
-        if (selectedCams.length > 0 && timelineSegments.length > 0 && serverDayStart && playheadMs === null) {
-            const startTs = Number(timelineSegments[0].start_ts);
-            setPlayheadMs(startTs - serverDayStart);
-            selectedCams.forEach(id => {
-                if (playersRef.current[id]) playersRef.current[id].start(startTs);
-            });
-            setIsPlaying(true);
-        }
-    }, [timelineSegments, serverDayStart, playheadMs, selectedCams]);
-
-    // Video Listeners
-    useEffect(() => {
-        const v = videoRef.current;
-        if (!v) return;
-        const onWaiting = () => setIsLoading(true);
-        const onPlaying = () => {
-            setIsLoading(false);
-            setIsPlaying(true);
-            setTimeout(() => { setIsSeeking(false); }, 800);
-        };
-        const onPause = () => setIsPlaying(false);
-        const onCanPlay = () => setIsLoading(false);
-        v.addEventListener('waiting', onWaiting);
-        v.addEventListener('playing', onPlaying);
-        v.addEventListener('pause', onPause);
-        v.addEventListener('canplay', onCanPlay);
         return () => {
-            v.removeEventListener('waiting', onWaiting);
-            v.removeEventListener('playing', onPlaying);
-            v.removeEventListener('pause', onPause);
-            v.removeEventListener('canplay', onCanPlay);
-        }
+            console.log('[Playback] Unmounting, stopping all players');
+            Object.values(playersRef.current).forEach(player => {
+                if (player) {
+                    player.stop(); // ANTIGRAVITY-5: OBLIGATORIU
+                    player.destroy();
+                }
+            });
+            playersRef.current = {};
+        };
     }, []);
 
-    // Unified Sync Loop
+    // --- AUTO-START PLAYBACK ---
+    useEffect(() => {
+        if (hasStartedRef.current) return;
+        if (selectedCams.length === 0 || timelineSegments.length === 0) return;
+
+        selectedCams.forEach(id => {
+            if (playersRef.current[id]) {
+                playersRef.current[id].play();
+            }
+        });
+
+        hasStartedRef.current = true;
+        setIsPlaying(true);
+    }, [selectedCams, timelineSegments]);
+
+    // --- DISPLAY SYNC LOOP ---
     useEffect(() => {
         const interval = setInterval(() => {
-            if (selectedCams.length === 0 || !serverDayStart || isSeeking) return;
-
-            // Get sync from first player
-            const primaryId = selectedCams[0];
-            const core = playersRef.current[primaryId];
+            if (selectedCams.length === 0 || !vmDayStartMs) return;
+            const core = playersRef.current[selectedCams[0]];
             if (!core) return;
-
             const currentEpoch = core.getCurrentEpochMs();
-            if (currentEpoch && currentEpoch > 0) {
-                setPlayheadMs(currentEpoch - serverDayStart);
-
-                // Gap-Sync Logic for slave players
-                selectedCams.slice(1).forEach(id => {
-                    const slave = playersRef.current[id];
-                    if (slave) {
-                        const slaveEpoch = slave.getCurrentEpochMs();
-                        // Auto-skip gaps if drift > 2s
-                        if (Math.abs(slaveEpoch - currentEpoch) > 2000) {
-                            slave.seekTo(currentEpoch);
-                        }
-                    }
-                });
+            if (currentEpoch > 0) {
+                setDisplayPlayheadMs(currentEpoch - vmDayStartMs);
             }
-        }, 200);
+        }, 500);
         return () => clearInterval(interval);
-    }, [serverDayStart, isSeeking, selectedCams]);
+    }, [vmDayStartMs, selectedCams]);
 
-    // --- DRAW ---
+    // --- USER ACTIONS ---
+    const handlePlay = () => {
+        selectedCams.forEach(id => {
+            if (playersRef.current[id]) playersRef.current[id].play();
+        });
+        setIsPlaying(true);
+    };
+
+    const handlePause = () => {
+        selectedCams.forEach(id => {
+            if (playersRef.current[id]) playersRef.current[id].pause();
+        });
+        setIsPlaying(false);
+    };
+
+    const handleStop = () => {
+        selectedCams.forEach(id => {
+            if (playersRef.current[id]) playersRef.current[id].stop();
+        });
+        setIsPlaying(false);
+        hasStartedRef.current = false;
+    };
+
+    const handleSeek = (epochMs) => {
+        console.log(`[UI] User SEEK to ${new Date(epochMs).toLocaleTimeString()}`);
+        selectedCams.forEach(id => {
+            if (playersRef.current[id]) {
+                playersRef.current[id].seek(epochMs);
+            }
+        });
+        setDisplayPlayheadMs(epochMs - vmDayStartMs);
+        setIsPlaying(true);
+    };
+
+    const handleSkip = (seconds) => {
+        if (displayPlayheadMs === null || !vmDayStartMs) return;
+        const newEpoch = vmDayStartMs + displayPlayheadMs + (seconds * 1000);
+        handleSeek(newEpoch);
+    };
+
+    // --- TIMELINE CLICK ---
+    const handleCanvasClick = (e) => {
+        const canvas = canvasRef.current;
+        if (!canvas || !vmDayStartMs) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+        const clickedRelativeMs = xToTime(x, canvas.width);
+        const clickedEpoch = vmDayStartMs + clickedRelativeMs;
+        handleSeek(clickedEpoch);
+    };
+
+    // --- TIMELINE ZOOM (mouse-anchored) ---
+    const handleWheel = (e) => {
+        e.preventDefault();
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
+
+        // Time under mouse cursor BEFORE zoom
+        const timeUnderMouse = xToTime(mouseX, canvas.width);
+
+        // Calculate new zoom
+        const zoomFactor = e.deltaY > 0 ? 0.85 : 1.18;
+        const newZoom = Math.max(1, Math.min(48, zoom * zoomFactor));
+
+        // Calculate new view start to keep timeUnderMouse at same screen position
+        const newVisibleMs = DAY_MS / newZoom;
+        const mouseRatio = mouseX / canvas.width;
+        const newViewStart = timeUnderMouse - (mouseRatio * newVisibleMs);
+
+        // Clamp to valid range
+        const clampedViewStart = Math.max(0, Math.min(DAY_MS - newVisibleMs, newViewStart));
+
+        setZoom(newZoom);
+        setViewStartMs(clampedViewStart);
+    };
+
+    // Toggle camera selection
+    const toggleCamera = (camId) => {
+        if (selectedCams.includes(camId)) {
+            setSelectedCams(selectedCams.filter(id => id !== camId));
+        } else {
+            setSelectedCams([...selectedCams, camId]);
+        }
+        hasStartedRef.current = false;
+    };
+
+    // --- DRAW TIMELINE (continuous render) ---
     const draw = useCallback(() => {
         const canvas = canvasRef.current;
-        if (!canvas || !serverDayStart) return;
+        if (!canvas || !vmDayStartMs) return;
 
         const ctx = canvas.getContext('2d');
         const width = canvas.width;
         const height = canvas.height;
+        const visibleMs = getVisibleDurationMs();
 
-        ctx.fillStyle = '#111';
+        // Background
+        ctx.fillStyle = '#0a0a0a';
         ctx.fillRect(0, 0, width, height);
 
-        ctx.strokeStyle = '#333';
-        ctx.fillStyle = '#eee';
-        ctx.font = '11px monospace';
+        // Grid lines and time labels
+        const msPerPixel = visibleMs / width;
+        let gridInterval;
+        if (msPerPixel < 1000) gridInterval = MIN_MS;           // 1 min
+        else if (msPerPixel < 5000) gridInterval = MIN_MS * 5;  // 5 min  
+        else if (msPerPixel < 15000) gridInterval = MIN_MS * 15; // 15 min
+        else if (msPerPixel < 60000) gridInterval = HOUR_MS;    // 1 hour
+        else gridInterval = HOUR_MS * 2;                        // 2 hours
 
-        // Calculate visuals
-        const hourWidth = timeToX(HOUR_MS, width) - timeToX(0, width);
+        const startGrid = Math.floor(viewStartMs / gridInterval) * gridInterval;
 
-        for (let h = 0; h < 24; h++) {
-            const hMs = h * HOUR_MS;
-            const x = timeToX(hMs, width);
+        ctx.font = '10px monospace';
+        for (let t = startGrid; t <= viewStartMs + visibleMs; t += gridInterval) {
+            const x = timeToX(t, width);
+            if (x < 0 || x > width) continue;
 
-            // Draw Hour (Local Display)
-            if (x >= 0 && x <= width) {
-                ctx.beginPath();
-                ctx.moveTo(x, 0);
-                ctx.lineTo(x, height);
-                ctx.strokeStyle = '#444';
-                ctx.stroke();
-                ctx.fillText(`${h}:00`, x + 3, 12);
-            }
+            const isMajor = t % HOUR_MS === 0;
+            ctx.strokeStyle = isMajor ? '#333' : '#1a1a1a';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
 
-            // Draw Minutes if zoomed enough
-            if (hourWidth > 60) {
-                // 30 min mark
-                const m30 = hMs + 30 * MIN_MS;
-                const x30 = timeToX(m30, width);
-                if (x30 >= 0 && x30 <= width) {
-                    ctx.beginPath();
-                    ctx.moveTo(x30, height - 10);
-                    ctx.lineTo(x30, height);
-                    ctx.strokeStyle = '#333';
-                    ctx.stroke();
-                }
-            }
-
-            if (hourWidth > 120) {
-                // 15, 45 min marks
-                [15, 45].forEach(min => {
-                    const m = hMs + min * MIN_MS;
-                    const mx = timeToX(m, width);
-                    if (mx >= 0 && mx <= width) {
-                        ctx.beginPath();
-                        ctx.moveTo(mx, height - 6);
-                        ctx.lineTo(mx, height);
-                        ctx.strokeStyle = '#333';
-                        ctx.stroke();
-                    }
-                });
+            if (isMajor || gridInterval <= MIN_MS * 5) {
+                const hours = Math.floor(t / HOUR_MS);
+                const mins = Math.floor((t % HOUR_MS) / MIN_MS);
+                const label = `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+                ctx.fillStyle = '#666';
+                ctx.fillText(label, x + 2, 10);
             }
         }
 
+        // Segments
         ctx.fillStyle = '#2ecc71';
         timelineSegments.forEach(seg => {
-            // Draw relative to Local Midnight Anchor
-            const startRel = seg.start_ts - serverDayStart;
-            const endRel = seg.end_ts - serverDayStart;
-            const x1 = timeToX(startRel, width);
-            const x2 = timeToX(endRel, width);
+            const segStart = seg.start_ts - vmDayStartMs;
+            const segEnd = seg.end_ts - vmDayStartMs;
+            const x1 = timeToX(segStart, width);
+            const x2 = timeToX(segEnd, width);
 
             if (x2 >= 0 && x1 <= width) {
                 const drawX1 = Math.max(0, x1);
                 const drawX2 = Math.min(width, x2);
-                const drawWidth = drawX2 - drawX1;
-                if (drawWidth > 0) ctx.fillRect(drawX1, height - 20, drawWidth, 20);
+                ctx.fillRect(drawX1, height - 14, drawX2 - drawX1, 14);
             }
         });
 
-        if (playheadMs !== null) {
-            const px = timeToX(playheadMs, width);
+        // NOW marker (VM time)
+        const nowRelative = vmNowMs - vmDayStartMs;
+        if (nowRelative >= 0 && nowRelative <= DAY_MS) {
+            const nowX = timeToX(nowRelative, width);
+            if (nowX >= 0 && nowX <= width) {
+                ctx.strokeStyle = '#3498db';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([3, 3]);
+                ctx.beginPath();
+                ctx.moveTo(nowX, 0);
+                ctx.lineTo(nowX, height);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // NOW label
+                ctx.fillStyle = '#3498db';
+                ctx.font = '9px sans-serif';
+                ctx.fillText('NOW', nowX + 2, height - 16);
+            }
+        }
+
+        // Playhead
+        if (displayPlayheadMs !== null) {
+            const px = timeToX(displayPlayheadMs, width);
             if (px >= 0 && px <= width) {
-                ctx.strokeStyle = 'red';
+                ctx.strokeStyle = '#e74c3c';
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.moveTo(px, 0);
                 ctx.lineTo(px, height);
                 ctx.stroke();
-                // Arrow
-                ctx.fillStyle = 'red';
-                ctx.beginPath();
-                ctx.moveTo(px - 5, 0);
-                ctx.lineTo(px + 5, 0);
-                ctx.lineTo(px, 8);
-                ctx.fill();
+
+                // Playhead time label
+                ctx.fillStyle = '#e74c3c';
+                ctx.font = 'bold 10px monospace';
+                const timeLabel = formatTimeDisplay(vmDayStartMs + displayPlayheadMs);
+                ctx.fillText(timeLabel, px + 4, 22);
             }
         }
-    }, [timelineSegments, serverDayStart, zoom, offsetMs, playheadMs]);
+    }, [vmDayStartMs, vmNowMs, timelineSegments, displayPlayheadMs, zoom, viewStartMs, timeToX, vmTimezone]);
 
-    useEffect(() => { draw(); }, [draw]);
-
-    // --- HANDLERS ---
-    const handleWheel = (e) => {
-        e.preventDefault();
-        const canvas = canvasRef.current;
-        const rect = canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseTime = xToTime(mouseX, rect.width);
-        let newZoom = Math.min(600, Math.max(1, zoom * (e.deltaY > 0 ? 0.8 : 1.2)));
-        const newVisibleMs = DAY_MS / newZoom;
-        let newOffset = mouseTime - (mouseX / rect.width) * newVisibleMs;
-        newOffset = Math.max(0, Math.min(DAY_MS - newVisibleMs, newOffset));
-        setZoom(newZoom);
-        setOffsetMs(newOffset);
-    };
-
-    const handleCanvasClick = (e) => {
-        if (!serverDayStart || timelineSegments.length === 0) return;
-
-        const canvas = canvasRef.current;
-        const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const clickedRelativeMs = xToTime(x, rect.width);
-        const clickedAbsoluteTs = serverDayStart + Math.max(0, Math.min(DAY_MS, clickedRelativeMs));
-
-        setIsSeeking(true);
-        setPlayheadMs(clickedAbsoluteTs - serverDayStart);
-
-        selectedCams.forEach(id => {
-            if (playersRef.current[id]) playersRef.current[id].seekTo(clickedAbsoluteTs);
-        });
-
-        setTimeout(() => setIsSeeking(false), 1000);
-    };
-
-    const handlePlay = () => {
-        setIsPlaying(true);
-        selectedCams.forEach(id => {
-            const v = videoRefs.current[id];
-            if (v) v.play();
-        });
-    };
-
-    const handlePause = () => {
-        setIsPlaying(false);
-        selectedCams.forEach(id => {
-            const v = videoRefs.current[id];
-            if (v) v.pause();
-        });
-    };
-
-    const handleSpeedChange = (speed) => {
-        setPlaybackSpeed(speed);
-        selectedCams.forEach(id => {
-            const v = videoRefs.current[id];
-            if (v) v.playbackRate = speed;
-        });
-    };
+    // Continuous render loop
+    useEffect(() => {
+        let frameId;
+        const render = () => {
+            const now = performance.now();
+            if (now - lastRenderRef.current > 50) {  // ~20fps for timeline
+                draw();
+                lastRenderRef.current = now;
+            }
+            frameId = requestAnimationFrame(render);
+        };
+        frameId = requestAnimationFrame(render);
+        return () => cancelAnimationFrame(frameId);
+    }, [draw]);
 
     // --- STYLES ---
-    const btnStyle = { padding: '8px 16px', background: '#333', color: '#fff', border: '1px solid #555', borderRadius: 4, cursor: 'pointer', fontSize: 13, fontWeight: 500, transition: 'all 0.2s' };
+    const sidebarWidth = 260;
+    const btnStyle = {
+        padding: '6px 12px',
+        background: '#222',
+        color: '#fff',
+        border: '1px solid #333',
+        borderRadius: 4,
+        cursor: 'pointer',
+        fontSize: 12
+    };
     const activeBtnStyle = { ...btnStyle, background: '#2ecc71', borderColor: '#27ae60' };
 
     return (
-        <div className="playback-page" style={{ height: 'calc(100vh - 64px)', display: 'flex', flexDirection: 'column', background: '#1a1a1a', color: '#eee', padding: '10px 20px', boxSizing: 'border-box', overflow: 'hidden', position: 'relative' }}>
+        <div style={{
+            height: 'calc(100vh - 64px)',
+            display: 'flex',
+            flexDirection: 'row',
+            background: '#0a0a0a',
+            color: '#eee',
+            overflow: 'hidden'
+        }}>
 
-            {/* ADVANCED DEBUG OVERLAY */}
+            {/* LEFT SIDEBAR */}
             <div style={{
-                position: 'fixed', top: 60, right: 10,
-                background: 'rgba(0,0,0,0.7)', color: '#00ff00',
-                padding: '8px', fontSize: '10px', fontFamily: 'Consolas, monospace',
-                pointerEvents: 'none', zIndex: 9999, border: '1px solid #00ff00',
-                display: 'grid', gridTemplateColumns: 'auto auto', gap: '15px',
-                borderRadius: 4, backdropFilter: 'blur(4px)'
+                width: sidebarWidth,
+                minWidth: sidebarWidth,
+                background: '#111',
+                borderRight: '1px solid #1a1a1a',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden'
             }}>
-                <div style={{ gridColumn: '1 / span 2', borderBottom: '1px solid #0f0', fontWeight: 'bold' }}>DEBUG 1550 (LUXON CORE)</div>
-
-                <div>
-                    <div style={{ color: 'yellow' }}>LAST CLICK EVENT</div>
-                    {debugSnapshot ? (
-                        <>
-                            <div>Local: {debugSnapshot.clickLocal}</div>
-                            <div>Type: {debugSnapshot.clickType}</div>
-                            <div>Action: {debugSnapshot.decision}</div>
-                            <div>Target: {debugSnapshot.targetLocal}</div>
-                            <div style={{ fontSize: 9, color: '#888' }}>{debugSnapshot.offsetInfo}</div>
-                        </>
-                    ) : <div>No click yet</div>}
+                <div style={{ padding: '12px', borderBottom: '1px solid #1a1a1a' }}>
+                    <div style={{ fontSize: 10, color: '#555', textTransform: 'uppercase', letterSpacing: 1 }}>
+                        Cameras ({selectedCams.length})
+                    </div>
                 </div>
 
-                <div>
-                    <div style={{ color: 'cyan' }}>LIVE SYSTEM</div>
-                    <div>Browser: {liveDebug.BrowserClock}</div>
-                    <div>LoopTime: {liveDebug.LoopLocal}</div>
-                    <div>SeekingLocked: {liveDebug.IsSeeking ? "YES" : "NO"}</div>
-                    <div>ServerTZ: {serverTimezone}</div>
-                </div>
-            </div>
-
-            <div style={{ marginBottom: 10, display: 'flex', gap: 15, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <label style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>Select Cameras (Ctrl+Click)</label>
-                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {cameras.map(c => (
-                            <button
-                                key={c.id}
-                                onClick={() => {
-                                    if (selectedCams.includes(c.id)) {
-                                        setSelectedCams(selectedCams.filter(id => id !== c.id));
-                                    } else {
-                                        setSelectedCams([...selectedCams, c.id]);
-                                    }
-                                }}
+                <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
+                    {cameras.map(cam => {
+                        const isSelected = selectedCams.includes(cam.id);
+                        return (
+                            <div
+                                key={cam.id}
+                                onClick={() => toggleCamera(cam.id)}
                                 style={{
-                                    padding: '4px 8px', border: '1px solid #444', borderRadius: 4, fontSize: 11,
-                                    background: selectedCams.includes(c.id) ? '#2ecc71' : '#333', color: '#fff', cursor: 'pointer'
+                                    padding: '10px 12px',
+                                    marginBottom: 4,
+                                    background: isSelected ? 'rgba(46, 204, 113, 0.1)' : '#151515',
+                                    border: `1px solid ${isSelected ? '#2ecc71' : '#1a1a1a'}`,
+                                    borderRadius: 6,
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 10
                                 }}
                             >
-                                {c.name || c.id}
-                            </button>
-                        ))}
+                                <div style={{
+                                    width: 8, height: 8, borderRadius: '50%',
+                                    background: isSelected ? '#2ecc71' : '#333'
+                                }} />
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{
+                                        fontSize: 12,
+                                        fontWeight: isSelected ? 600 : 400,
+                                        color: isSelected ? '#2ecc71' : '#888',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap'
+                                    }}>
+                                        {cam.name || cam.id}
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+
+                <div style={{ padding: '12px', borderTop: '1px solid #1a1a1a' }}>
+                    <div style={{ fontSize: 9, color: '#444', marginBottom: 6 }}>DATE</div>
+                    <input
+                        type="date"
+                        value={selectedDate}
+                        onChange={e => setSelectedDate(e.target.value)}
+                        style={{
+                            width: '100%', padding: '8px',
+                            background: '#1a1a1a', color: '#fff',
+                            border: '1px solid #222', borderRadius: 4, fontSize: 12
+                        }}
+                    />
+                    <div style={{ fontSize: 9, color: '#444', marginTop: 8 }}>
+                        VM Time: {vmTimezone || 'syncing...'}
                     </div>
                 </div>
-                {/* Date Select */}
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <label style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>Date</label>
-                    <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={{ padding: '3px 8px', background: '#333', color: '#fff', border: '1px solid #555', borderRadius: 4, outline: 'none' }} />
+            </div>
+
+            {/* MAIN CONTENT */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: 12 }}>
+
+                {/* Video Grid */}
+                <div style={{
+                    flex: 1, minHeight: 0,
+                    display: 'grid',
+                    gridTemplateColumns: selectedCams.length > 1 ? 'repeat(2, 1fr)' : '1fr',
+                    gridTemplateRows: selectedCams.length > 2 ? 'repeat(2, 1fr)' : '1fr',
+                    gap: 4, background: '#000', borderRadius: 6, padding: 4, marginBottom: 10
+                }}>
+                    {selectedCams.length === 0 ? (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#333' }}>
+                            Select cameras from sidebar
+                        </div>
+                    ) : (
+                        selectedCams.map(id => (
+                            <div key={id} style={{ position: 'relative', background: '#0a0a0a', borderRadius: 4, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <video
+                                    ref={el => videoRefs.current[id] = el}
+                                    autoPlay playsInline muted
+                                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                />
+                                <div style={{ position: 'absolute', top: 4, left: 4, background: 'rgba(0,0,0,0.8)', padding: '2px 8px', borderRadius: 4, fontSize: 10 }}>
+                                    {cameras.find(c => c.id === id)?.name || id}
+                                </div>
+                            </div>
+                        ))
+                    )}
                 </div>
-                <div style={{ flex: 1 }}></div>
-                {/* Range Info */}
-                {firstRecTime && lastRecTime && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: '#222', padding: '6px 12px', borderRadius: 4, border: '1px solid #333' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#e74c3c', animation: 'pulse 1.5s infinite' }}></div>
-                            <span style={{ fontSize: 11, fontWeight: 600, color: '#e74c3c' }}>REC</span>
-                        </div>
-                        <div style={{ fontSize: 11, color: '#2ecc71' }}>
-                            <div>{formatDateDisplay(firstRecTime)} {formatTimeDisplay(firstRecTime)}</div>
-                            <div style={{ color: '#888', marginTop: 2 }}>→ {formatTimeDisplay(lastRecTime)}</div>
-                        </div>
+
+                {/* Timeline */}
+                <div style={{
+                    width: '100%', height: 48,
+                    border: '1px solid #1a1a1a', borderRadius: 4,
+                    overflow: 'hidden', background: '#0a0a0a', marginBottom: 10
+                }}>
+                    <canvas
+                        ref={canvasRef}
+                        width={2000}
+                        height={48}
+                        style={{ width: '100%', height: '100%', cursor: 'crosshair' }}
+                        onClick={handleCanvasClick}
+                        onWheel={handleWheel}
+                    />
+                </div>
+
+                {/* Controls */}
+                <div style={{
+                    display: 'flex', gap: 6, alignItems: 'center',
+                    background: '#111', padding: '8px 12px', borderRadius: 4, border: '1px solid #1a1a1a'
+                }}>
+                    <button onClick={() => handleSkip(-30)} style={btnStyle}>-30s</button>
+                    <button onClick={() => handleSkip(-10)} style={btnStyle}>-10s</button>
+                    <button onClick={handleStop} style={btnStyle}>⏹</button>
+                    <button onClick={isPlaying ? handlePause : handlePlay} style={isPlaying ? activeBtnStyle : btnStyle}>
+                        {isPlaying ? '⏸' : '▶'}
+                    </button>
+                    <button onClick={() => handleSkip(10)} style={btnStyle}>+10s</button>
+                    <button onClick={() => handleSkip(30)} style={btnStyle}>+30s</button>
+
+                    <div style={{ flex: 1 }} />
+
+                    <div style={{ fontSize: 10, color: '#555', marginRight: 10 }}>
+                        Zoom: {zoom.toFixed(1)}x
                     </div>
-                )}
-            </div>
 
-            {/* Multicam Grid */}
-            <div className="video-container" style={{
-                flex: 1, minHeight: 0, marginBottom: 10,
-                display: 'grid', gridTemplateColumns: selectedCams.length > 1 ? 'repeat(2, 1fr)' : '1fr',
-                gap: 4, background: '#000', borderRadius: 8, padding: 4
-            }}>
-                {selectedCams.map(id => (
-                    <div key={id} style={{ position: 'relative', background: '#111', borderRadius: 4, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <video
-                            ref={el => videoRefs.current[id] = el}
-                            autoPlay playsInline muted
-                            style={{ maxHeight: '100%', maxWidth: '100%' }}
-                        />
-                        <div style={{ position: 'absolute', top: 4, left: 4, background: 'rgba(0,0,0,0.6)', padding: '2px 6px', borderRadius: 4, fontSize: 10 }}>
-                            {cameras.find(c => c.id === id)?.name || id}
-                        </div>
+                    <div style={{
+                        fontSize: 13, fontFamily: 'monospace', color: '#2ecc71',
+                        background: '#0a0a0a', padding: '6px 12px', borderRadius: 4, border: '1px solid #1a1a1a'
+                    }}>
+                        {displayPlayheadMs !== null ? formatTimeDisplay(vmDayStartMs + displayPlayheadMs) : '--:--:--'}
                     </div>
-                ))}
+                </div>
             </div>
-
-            {/* Timeline */}
-            <div className="timeline-container" style={{ width: '100%', height: 60, flexShrink: 0, position: 'relative', border: '1px solid #333', borderRadius: 4, overflow: 'hidden', background: '#222', marginBottom: 10 }}>
-                <canvas ref={canvasRef} id="timeline" width={2000} height={60} style={{ width: '100%', height: '100%', cursor: 'crosshair', display: 'block' }} onClick={handleCanvasClick} onWheel={handleWheel} />
-            </div>
-
-            {/* Controls */}
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0, padding: '10px 0', borderTop: '1px solid #333' }}>
-                <button onClick={() => handleSkip(-10)} style={btnStyle} title="Rewind 10s">⏪ -10s</button>
-                <button onClick={handleStop} style={btnStyle} title="Stop">⏹</button>
-                <button onClick={isPlaying ? handlePause : handlePlay} style={isPlaying ? activeBtnStyle : btnStyle} title={isPlaying ? "Pause" : "Play"}>
-                    {isPlaying ? '⏸' : '▶'}
-                </button>
-                <button onClick={() => handleSkip(10)} style={btnStyle} title="Forward 10s">⏩ +10s</button>
-
-                <div style={{ width: 1, height: 30, background: '#444', margin: '0 10px' }}></div>
-
-                <span style={{ fontSize: 12, color: '#888' }}>Speed:</span>
-                <button onClick={() => handleSpeedChange(0.5)} style={playbackSpeed === 0.5 ? activeBtnStyle : btnStyle}>0.5x</button>
-                <button onClick={() => handleSpeedChange(1)} style={playbackSpeed === 1 ? activeBtnStyle : btnStyle}>1x</button>
-                <button onClick={() => handleSpeedChange(2)} style={playbackSpeed === 2 ? activeBtnStyle : btnStyle}>2x</button>
-                <button onClick={() => handleSpeedChange(4)} style={playbackSpeed === 4 ? activeBtnStyle : btnStyle}>4x</button>
-
-                <div style={{ flex: 1 }}></div>
-                <div style={{ fontSize: 11, color: '#666' }}>Zoom: {zoom.toFixed(1)}x</div>
-            </div>
-
-            <style>{`
-                @keyframes pulse {
-                    0% { opacity: 1; transform: scale(1); }
-                    50% { opacity: 0.5; transform: scale(1.2); }
-                    100% { opacity: 1; transform: scale(1); }
-                }
-            `}</style>
         </div>
     );
 };

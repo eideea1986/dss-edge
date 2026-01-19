@@ -7,17 +7,14 @@ const livePlaylist = require('../playback/livePlaylist');
 // Live Delay Route (3s delay sliding window)
 router.get('/live/:camId.m3u8', livePlaylist.getLivePlaylist);
 
-// HLS Routes (VOD)
-router.get('/playlist/:camId.m3u8', controller.getPlaylist);
+// MSE/JSON Routes
+router.get('/playlist/:camId', controller.getPlaylist);
 router.get('/stream/:camId/:file', controller.streamSegment);
 
-// MJPEG Route (Playback Bridge)
-router.get('/mjpeg/:camId', controller.streamMJPEG);
-
 // Stats/Timeline
-router.get('/stats/:camId', stats.getStats);
 router.get('/timeline-day/:camId/:date', stats.getTimelineDay);
 router.get('/range/:camId', controller.getGlobalRecordingRange);
+router.get('/stats/:camId', stats.getStats);
 
 const crypto = require('crypto');
 const PLAYBACK_SECRET = process.env.PLAYBACK_SECRET || "TEAMS_DSS_SECRET_2k25";
