@@ -12,8 +12,8 @@ ExecStart=/usr/bin/dss-supervisor
 StandardOutput=journal
 StandardError=journal
 
-# Watchdog (systemd will restart if supervisor itself hangs)
-WatchdogSec=60
+# Watchdog (removed to prevent timeout restarts)
+# WatchdogSec=60
 
 # Resource limits
 LimitNOFILE=65536

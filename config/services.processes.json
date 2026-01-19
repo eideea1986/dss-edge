@@ -1,0 +1,400 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "DSS Edge Service Registry",
+    "description": "Mandatory registry for ALL processes and services in DSS Edge Enterprise NVR",
+    "version": "1.0.0",
+    "lastUpdated": "2026-01-18T14:48:00Z",
+    "services": {
+        "systemd": {
+            "dss-supervisor": {
+                "name": "dss-supervisor",
+                "role": "system_supervisor",
+                "type": "systemd",
+                "binary": "/usr/local/bin/dss-supervisor",
+                "workingDir": "/opt/dss-edge",
+                "runUser": "root",
+                "criticality": "critical",
+                "description": "Main supervisor daemon - manages all child services",
+                "healthCheck": {
+                    "type": "process",
+                    "pidFile": "/run/dss/supervisor.pid"
+                }
+            },
+            "dss-api": {
+                "name": "dss-api",
+                "role": "api_server",
+                "type": "systemd",
+                "binary": "/usr/bin/node",
+                "args": [
+                    "/opt/dss-edge/local-api/server.js"
+                ],
+                "workingDir": "/opt/dss-edge/local-api",
+                "runUser": "root",
+                "criticality": "critical",
+                "description": "Main REST API server",
+                "healthCheck": {
+                    "type": "http",
+                    "endpoint": "http://127.0.0.1:8080/api/system/health",
+                    "interval": 10
+                }
+            },
+            "dss-go2rtc": {
+                "name": "dss-go2rtc",
+                "role": "streaming_server",
+                "type": "systemd",
+                "binary": "/usr/local/bin/go2rtc",
+                "args": [
+                    "-config",
+                    "/opt/dss-edge/config/go2rtc.yaml"
+                ],
+                "workingDir": "/opt/dss-edge",
+                "runUser": "root",
+                "criticality": "critical",
+                "description": "RTSP/WebRTC streaming server",
+                "healthCheck": {
+                    "type": "http",
+                    "endpoint": "http://127.0.0.1:1984/api",
+                    "interval": 15
+                }
+            }
+        },
+        "internal": {
+            "orchestrator": {
+                "name": "orchestrator",
+                "role": "service_orchestrator",
+                "type": "internal",
+                "parent": "dss-supervisor",
+                "binary": "/usr/bin/node",
+                "args": [
+                    "orchestrator/edgeOrchestrator.js"
+                ],
+                "workingDir": "/opt/dss-edge",
+                "runUser": "root",
+                "criticality": "critical",
+                "description": "Internal service orchestrator - manages recorder, indexer, arming, AI",
+                "healthCheck": {
+                    "type": "redis",
+                    "key": "hb:orchestrator",
+                    "maxAge": 15000
+                }
+            },
+            "recorder_v2": {
+                "name": "recorder_v2",
+                "role": "video_recorder",
+                "type": "internal",
+                "parent": "orchestrator",
+                "binary": "/usr/bin/node",
+                "args": [
+                    "modules/record/recorder_v2.js"
+                ],
+                "workingDir": "/opt/dss-edge",
+                "runUser": "root",
+                "criticality": "critical",
+                "description": "Enterprise video recorder (FFmpeg orchestrator)",
+                "healthCheck": {
+                    "type": "redis",
+                    "key": "hb:recorder",
+                    "maxAge": 10000
+                },
+                "writeProof": {
+                    "type": "redis",
+                    "key": "recorder:last_write",
+                    "maxAge": 40000
+                }
+            },
+            "storage_indexer": {
+                "name": "storage_indexer",
+                "role": "video_indexer",
+                "type": "internal",
+                "parent": "orchestrator",
+                "binary": "/usr/bin/node",
+                "args": [
+                    "modules/record/storage_indexer.js"
+                ],
+                "workingDir": "/opt/dss-edge",
+                "runUser": "root",
+                "criticality": "non-critical",
+                "description": "Storage indexer and SQLite database manager",
+                "healthCheck": {
+                    "type": "redis",
+                    "key": "hb:indexer",
+                    "maxAge": 60000
+                }
+            },
+            "arming_service": {
+                "name": "arming_service",
+                "role": "arming_controller",
+                "type": "internal",
+                "parent": "orchestrator",
+                "binary": "/usr/bin/node",
+                "args": [
+                    "modules/arming/arming_service.js"
+                ],
+                "workingDir": "/opt/dss-edge",
+                "runUser": "root",
+                "criticality": "critical",
+                "description": "Arming state controller (IMPLACABLE MODE)",
+                "healthCheck": {
+                    "type": "redis",
+                    "key": "hb:arming",
+                    "maxAge": 15000
+                },
+                "stateCheck": {
+                    "type": "redis",
+                    "key": "state:arming",
+                    "requiredFields": [
+                        "armed",
+                        "timestamp"
+                    ]
+                }
+            },
+            "ai_request_service": {
+                "name": "ai_request_service",
+                "role": "ai_gateway",
+                "type": "internal",
+                "parent": "orchestrator",
+                "binary": "/usr/bin/node",
+                "args": [
+                    "modules/ai/ai_request_service.js"
+                ],
+                "workingDir": "/opt/dss-edge",
+                "runUser": "root",
+                "criticality": "non-critical",
+                "description": "AI inference gateway and snapshot processor",
+                "healthCheck": {
+                    "type": "redis",
+                    "key": "hb:ai",
+                    "maxAge": 30000
+                }
+            },
+            "retention_engine": {
+                "name": "retention_engine",
+                "role": "data_retention",
+                "type": "internal",
+                "parent": "orchestrator",
+                "binary": "/usr/bin/node",
+                "args": [
+                    "retention/retention_engine.js",
+                    "${MODE}"
+                ],
+                "workingDir": "/opt/dss-edge",
+                "runUser": "root",
+                "criticality": "non-critical",
+                "description": "Disk space retention policy manager",
+                "healthCheck": {
+                    "type": "redis",
+                    "key": "hb:retention",
+                    "maxAge": 60000
+                }
+            },
+            "live_stream_manager": {
+                "name": "live_stream_manager",
+                "role": "live_controller",
+                "type": "internal",
+                "parent": "orchestrator",
+                "binary": "/usr/bin/node",
+                "args": [
+                    "modules/live/LiveStreamManager.js"
+                ],
+                "workingDir": "/opt/dss-edge",
+                "runUser": "root",
+                "criticality": "critical",
+                "description": "Enterprise Live Stream Manager (TRASSIR MODE)",
+                "healthCheck": {
+                    "type": "redis",
+                    "key": "hb:live_manager",
+                    "maxAge": 15000
+                }
+            },
+            "arming_snapshot_service": {
+                "name": "arming_snapshot_service",
+                "role": "arming_history",
+                "type": "internal",
+                "parent": "orchestrator",
+                "binary": "/usr/bin/node",
+                "args": [
+                    "modules/arming/arming_service.js"
+                ],
+                "workingDir": "/opt/dss-edge",
+                "runUser": "root",
+                "criticality": "non-critical",
+                "description": "Snapshots on arming changes + retention",
+                "healthCheck": {
+                    "type": "redis",
+                    "key": "hb:arming_snapshot",
+                    "maxAge": 60000
+                }
+            }
+        },
+        "external": {
+            "heartbeat_daemon": {
+                "name": "heartbeat",
+                "role": "system_monitor",
+                "type": "external",
+                "parent": "dss-supervisor",
+                "binary": "/usr/bin/dss-heartbeat",
+                "args": [],
+                "workingDir": "/opt/dss-edge",
+                "runUser": "root",
+                "criticality": "critical",
+                "description": "System resource monitor (CPU, RAM, Disk)",
+                "healthCheck": {
+                    "type": "file",
+                    "path": "/tmp/dss-system.hb",
+                    "maxAge": 10000
+                }
+            },
+            "wireguard_dispatch": {
+                "name": "wg-dispatch",
+                "role": "vpn_tunnel",
+                "type": "external",
+                "parent": "systemd",
+                "binary": "/usr/bin/wg-quick",
+                "args": [
+                    "up",
+                    "wg0"
+                ],
+                "workingDir": "/etc/wireguard",
+                "runUser": "root",
+                "criticality": "critical",
+                "description": "VPN tunnel to Dispatch server",
+                "healthCheck": {
+                    "type": "redis",
+                    "key": "state:vpn:wg0",
+                    "expectedValue": "UP"
+                }
+            },
+            "wireguard_ai": {
+                "name": "wg-ai",
+                "role": "vpn_tunnel",
+                "type": "external",
+                "parent": "systemd",
+                "binary": "/usr/bin/wg-quick",
+                "args": [
+                    "up",
+                    "wg1"
+                ],
+                "workingDir": "/etc/wireguard",
+                "runUser": "root",
+                "criticality": "non-critical",
+                "description": "VPN tunnel to AI server",
+                "healthCheck": {
+                    "type": "redis",
+                    "key": "state:vpn:wg1",
+                    "expectedValue": "UP"
+                }
+            }
+        },
+        "child_processes": {
+            "ffmpeg_recorder": {
+                "name": "ffmpeg-recorder",
+                "role": "video_encoder",
+                "type": "child",
+                "parent": "recorder_v2",
+                "binary": "/usr/bin/ffmpeg",
+                "argsTemplate": [
+                    "-rtsp_transport",
+                    "tcp",
+                    "-i",
+                    "${RTSP_URL}",
+                    "-c:v",
+                    "copy",
+                    "-f",
+                    "segment",
+                    "-segment_time",
+                    "10",
+                    "-segment_format",
+                    "mp4",
+                    "-strftime",
+                    "1",
+                    "${OUTPUT_PATH}"
+                ],
+                "workingDir": "/opt/dss-edge/storage",
+                "runUser": "root",
+                "criticality": "critical",
+                "description": "FFmpeg recorder instance (per-camera)",
+                "lifecycle": {
+                    "maxLifetime": "unlimited",
+                    "terminationPolicy": "graceful",
+                    "orphanPolicy": "kill"
+                }
+            },
+            "ffmpeg_snapshot": {
+                "name": "ffmpeg-snapshot",
+                "role": "snapshot_generator",
+                "type": "child",
+                "parent": "ai_request_service",
+                "binary": "/usr/bin/ffmpeg",
+                "argsTemplate": [
+                    "-y",
+                    "-rtsp_transport",
+                    "tcp",
+                    "-i",
+                    "${RTSP_URL}",
+                    "-frames:v",
+                    "1",
+                    "${OUTPUT_PATH}"
+                ],
+                "workingDir": "/opt/dss-edge/recorder/ramdisk/snapshots",
+                "runUser": "root",
+                "criticality": "non-critical",
+                "description": "FFmpeg snapshot generator (per-camera)",
+                "lifecycle": {
+                    "maxLifetime": 5000,
+                    "terminationPolicy": "force",
+                    "orphanPolicy": "kill"
+                }
+            },
+            "ffmpeg_export": {
+                "name": "ffmpeg-export",
+                "role": "video_exporter",
+                "type": "child",
+                "parent": "dss-api",
+                "binary": "/usr/bin/ffmpeg",
+                "argsTemplate": [
+                    "-i",
+                    "${INPUT_PATH}",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "ultrafast",
+                    "${OUTPUT_PATH}"
+                ],
+                "workingDir": "/tmp",
+                "runUser": "root",
+                "criticality": "non-critical",
+                "description": "Video export for download",
+                "lifecycle": {
+                    "maxLifetime": 300000,
+                    "terminationPolicy": "graceful",
+                    "orphanPolicy": "kill"
+                }
+            }
+        }
+    },
+    "enforcement": {
+        "strictMode": true,
+        "allowUndeclared": false,
+        "failOnMissing": true,
+        "logLevel": "ERROR"
+    },
+    "validation": {
+        "requiredFields": [
+            "name",
+            "role",
+            "type",
+            "binary",
+            "criticality"
+        ],
+        "allowedTypes": [
+            "systemd",
+            "internal",
+            "external",
+            "child"
+        ],
+        "allowedCriticality": [
+            "critical",
+            "non-critical"
+        ]
+    }
+}

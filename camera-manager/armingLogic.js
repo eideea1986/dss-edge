@@ -26,62 +26,92 @@ const getArmingConfig = () => {
     return { assignments: {}, modes: {}, schedules: {} };
 };
 
-const isArmed = (cam) => {
-    if (!cam || !cam.enabled) return false;
+const isTimeInSchedule = (schedule) => {
+    if (!schedule || schedule.enabled === false) return false;
 
-    // 1. AI Server global switch (Legacy Override)
-    if (cam.ai_server && cam.ai_server.enabled === false) return false;
+    // Support for 7x48 bitmask matrix (30min slots)
+    if (schedule.matrix) {
+        const now = new Date();
+        const day = now.getDay(); // 0-6
+        const slot = Math.floor(now.getHours() * 2) + Math.floor(now.getMinutes() / 30); // 0-47
 
-    // 2. Load Real Config (Source of Truth)
-    const config = getArmingConfig();
-    const assignment = config.assignments ? config.assignments[cam.id] : null;
-
-    // 3. Evaluate Assignment
-    if (!assignment || assignment === 'DISARMED') {
-        // Fallback to legacy behavior strictly if NO assignment exists in new system
-        // But if explicitly DISARMED in UI, return false.
-        if (assignment === 'DISARMED') return false;
-
-        // Legacy: Check cam.arming_state
-        if (cam.arming_state === 'DISARMED') return false;
-
-        // Default ARMED for backward compatibility if no config at all
-        return true;
+        const dayMatrix = schedule.matrix[day.toString()] || schedule.matrix[day] || (Array.isArray(schedule.matrix) ? schedule.matrix[day] : null);
+        if (dayMatrix && (dayMatrix[slot] === 1 || dayMatrix[slot] === true)) {
+            return true;
+        }
     }
 
-    // 4. Check Modes (ARMED_AWAY, ARMED_HOME, etc.)
-    if (['ARMED_AWAY', 'ARMED_HOME', 'ARMED_NIGHT'].includes(assignment)) {
-        return !!config.modes[assignment]; // Return true only if mode is ACTIVE
+    // Support for intervals array (Fallback)
+    if (schedule.intervals && Array.isArray(schedule.intervals)) {
+        const now = new Date();
+        const day = now.getDay();
+        const time = now.getHours() * 100 + now.getMinutes();
+
+        return schedule.intervals.some(inv => {
+            const invDay = parseInt(inv.day);
+            if (isNaN(invDay) || invDay === day) {
+                const start = parseInt(inv.start.replace(':', ''));
+                const end = parseInt(inv.end.replace(':', ''));
+                return time >= start && time <= end;
+            }
+            return false;
+        });
     }
 
-    // 5. Check Schedules
-    // assignment is a schedule ID (UUID or index)
-    // TODO: Implement complex time check here.
-    // For now, if assigned to a schedule, check if schedule itself is "enabled" flag if present
-    // Or just assume ARMED during schedule (complex without cron parser)
-
-    // MVP: If assigned to a schedule, we check if that schedule exists
-    // Ideally user wants: Is CURRENT TIME inside schedule?
-    // We will assume "ARMED" if inside schedule. Implementing simple check:
-
-    // Finding schedule object
-    let schedule = null;
-    if (Array.isArray(config.schedules)) {
-        schedule = config.schedules[parseInt(assignment)] || config.schedules.find(s => s.id === assignment);
-    } else if (config.schedules) {
-        schedule = config.schedules[assignment];
-    }
-
-    if (schedule) {
-        if (schedule.enabled === false) return false;
-        // If Schedule Enabled -> We need Time Check.
-        // For MVP Speed: Assume ALWAYS ARMED if Schedule Enabled (User manages schedule state manually or external cron)
-        // OR todo: parse intervals.
-        return true;
-    }
-
-    // Default Fallback
+    // Default: If schedule enabled but no matrix/intervals, treat as always armed
     return true;
 };
 
-module.exports = { isArmed };
+const getEffectiveState = (camId, camerasConfig = []) => {
+    const config = getArmingConfig();
+    const cam = camerasConfig.find(c => c.id === camId) || { id: camId, enabled: true };
+
+    if (!cam.enabled) return { armed: false, zones: [] };
+
+    const assignment = config.assignments ? config.assignments[camId] : null;
+
+    // 1. Hard Constants
+    if (assignment === 'DISARMED') return { armed: false, zones: [] };
+    if (assignment === 'ALWAYS') return { armed: true, zones: (config.zones?.[camId] || []) };
+
+    // 2. Global Modes & Scenarios
+    const scenarios = ['ARMED_AWAY', 'ARMED_HOME', 'ARMED_NIGHT', 'SCENARIO_1', 'SCENARIO_2', 'SCENARIO_3'];
+    if (scenarios.includes(assignment)) {
+        const isModeActive = !!config.modes[assignment];
+        return { armed: isModeActive, zones: isModeActive ? (config.zones?.[camId] || []) : [] };
+    }
+
+    // 3. Schedules (Lookup by ID or Index)
+    let schedule = null;
+    if (Array.isArray(config.schedules)) {
+        // Try ID first
+        schedule = config.schedules.find(s => s.id === assignment);
+        // Fallback to Index if assignment is numeric string
+        if (!schedule && assignment !== null && /^\d+$/.test(assignment)) {
+            schedule = config.schedules[parseInt(assignment)];
+        }
+    }
+
+    if (schedule) {
+        const scheduleActive = isTimeInSchedule(schedule);
+
+        // Mode Linkage (The "Follow" logic)
+        let modeActive = true;
+        if (schedule.linkedMode && config.modes) {
+            modeActive = !!config.modes[schedule.linkedMode];
+        }
+
+        const effectivelyArmed = scheduleActive && modeActive;
+        return {
+            armed: effectivelyArmed,
+            zones: effectivelyArmed ? (config.zones?.[camId] || []) : [],
+            reason: !scheduleActive ? 'SCHEDULE_INACTIVE' : (!modeActive ? 'MODE_INACTIVE' : 'OK')
+        };
+    }
+
+    // 4. Default Fallback (Legacy)
+    const legacyArmed = cam.arming_state !== 'DISARMED';
+    return { armed: legacyArmed, zones: legacyArmed ? (config.zones?.[camId] || []) : [] };
+};
+
+module.exports = { isArmed: (cam) => getEffectiveState(cam.id, [cam]).armed, getEffectiveState };

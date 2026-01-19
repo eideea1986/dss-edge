@@ -5,11 +5,29 @@ const router = express.Router();
 const cameraStore = require('../store/cameraStore');
 const addCamera = require('../../camera-manager/addCamera');
 
-// GET /cameras - List all
-router.get("/", (req, res) => {
+const Redis = require("ioredis");
+const redis = new Redis();
+
+// GET /cameras - List all with RECORDING PROOF
+router.get("/", async (req, res) => {
     try {
         const list = cameraStore.list();
-        res.json(list);
+        const lastWrites = await redis.hgetall("recorder:last_write");
+        const now = Date.now();
+
+        const enriched = list.map(cam => {
+            const lastWrite = lastWrites[cam.id];
+            const drift = lastWrite ? now - Number(lastWrite) : 999999;
+            const isRecording = (drift < 30000); // 30s threshold (segment duration is ~5s)
+
+            return {
+                ...cam,
+                recording_status: isRecording, // TRUE TRUTH
+                last_write_at: lastWrite ? new Date(Number(lastWrite)).toISOString() : null
+            };
+        });
+
+        res.json(enriched);
     } catch (e) {
         // Debugging info
         console.error("Camera List Error:", e);

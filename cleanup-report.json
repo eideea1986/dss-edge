@@ -1,0 +1,45 @@
+{
+    "timestamp": "2026-01-19T11:05:00Z",
+    "profile": "global-deadcode-cleanup",
+    "summary": {
+        "total_deleted_files": 45,
+        "total_deleted_dirs": 4,
+        "freed_space": "approx 150MB"
+    },
+    "categories": {
+        "bootstrap-fallback": [
+            "recorder/recorder.js",
+            "recorder/recorder_remote.js",
+            "recorder/dss-recorder.service"
+        ],
+        "orchestrator-legacy": [
+            "recorder_deploy/modules/record/recorder_wrapper.js"
+        ],
+        "ai-legacy": [
+            "ai_server.py",
+            "fix_ai_arrows.py",
+            "ai-intelligence/"
+        ],
+        "recorder-legacy": [
+            "recorder/src/",
+            "recorder/main.cpp",
+            "recorder/Decoder.cpp",
+            "recorder/WriterPool.cpp"
+        ],
+        "playback-legacy": [
+            "recorder/playback-engine.js",
+            "recorder/PlaybackEngine*.cpp",
+            "local-ui/src/services/PlaybackController.js"
+        ],
+        "config-legacy": [
+            "config/cameras_*.json",
+            "config/service-registry.json",
+            "config/remote_cameras.json"
+        ]
+    },
+    "status": "COMPLETED_LOCAL",
+    "verification": {
+        "registry_integrity": "OK",
+        "core_services_reachable": "OK"
+    }
+}

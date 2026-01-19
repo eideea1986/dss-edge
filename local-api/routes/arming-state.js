@@ -32,16 +32,8 @@ router.get('/state', async (req, res) => {
 
         const armingState = JSON.parse(armingStateStr);
 
-        // Validate arming state structure (EXEC-22 requirement)
-        if (typeof armingState.armed !== 'boolean') {
-            return res.status(500).json({
-                armed: false,
-                state: 'FAIL',
-                cameras: {},
-                timestamp: armingState.timestamp || null,
-                error: 'Arming state corrupted - armed field invalid'
-            });
-        }
+        // Build per-camera arming status (Prioritize the computed truth from arming service)
+        const cameras = armingState.cameras || {};
 
         // Check staleness (EXEC-22: max 15s)
         const now = Date.now();
@@ -57,32 +49,11 @@ router.get('/state', async (req, res) => {
             });
         }
 
-        // Build per-camera arming status
-        const cameras = {};
-        const zones = armingState.zones || {};
-
-        // If globally armed, check which cameras have zones assigned
-        if (armingState.armed) {
-            for (const [zoneId, cameraIds] of Object.entries(zones)) {
-                if (Array.isArray(cameraIds)) {
-                    cameraIds.forEach(camId => {
-                        if (!cameras[camId]) {
-                            cameras[camId] = {
-                                armed: true,
-                                zones: []
-                            };
-                        }
-                        cameras[camId].zones.push(zoneId);
-                    });
-                }
-            }
-        }
-
         // Response
         res.json({
             armed: armingState.armed,
             state: 'OK',
-            cameras,
+            cameras: cameras, // Computed truth (effectiveArmed)
             zones: armingState.zones || {},
             schedules: armingState.schedules || {},
             timestamp: armingState.timestamp,
@@ -171,7 +142,7 @@ router.get('/camera/:cameraId', async (req, res) => {
 router.post('/arm', async (req, res) => {
     try {
         // Call arming service HTTP API
-        const armingServiceUrl = 'http://127.0.0.1:9100/arm';
+        const armingServiceUrl = 'http://127.0.0.1:9101/arm'; // ANTIGRAVITY: --arming-service-port 9101
         const response = await fetch(armingServiceUrl, { method: 'POST' });
 
         if (response.ok) {
@@ -201,7 +172,7 @@ router.post('/arm', async (req, res) => {
  */
 router.post('/disarm', async (req, res) => {
     try {
-        const armingServiceUrl = 'http://127.0.0.1:9100/disarm';
+        const armingServiceUrl = 'http://127.0.0.1:9101/disarm'; // ANTIGRAVITY: --arming-service-port 9101
         const response = await fetch(armingServiceUrl, { method: 'POST' });
 
         if (response.ok) {

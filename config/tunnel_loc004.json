@@ -1,8 +1,0 @@
-{
-    "enabled": true,
-    "dispatchHost": "194.107.163.227",
-    "dispatchApiPort": 21002,
-    "dispatchVideoPort": 22002,
-    "nvrHost": "86.120.56.118",
-    "nvrPort": 8080
-}

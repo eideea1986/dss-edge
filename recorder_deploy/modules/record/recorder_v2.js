@@ -10,9 +10,12 @@ const path = require("path");
 const Redis = require("ioredis");
 const sqlite3 = require("sqlite3").verbose();
 
+// ANTIGRAVITY: Recorder Enterprise Plus
+const { initRecorderEnterprise, getRecorderEnterprise } = require("./RecorderEnterprise");
+
 // --- CONFIGURATION ---
 const CONFIG = {
-    SEGMENT_DURATION: 5,
+    SEGMENT_DURATION: 4, // ANTIGRAVITY: --segment-gop-multiplier 4 (aligned for 1s GOP)
     FPS: 25,
     STORAGE_ROOT: "/opt/dss-edge/storage",
     WORK_DIR: "/opt/dss-edge/recorder/work",
@@ -51,7 +54,7 @@ class ProbeManager {
         console.log(`[RECORDER] Gating: Probing ${cam.id}...`);
         const user = cam.credentials?.user || cam.user || "admin";
         const pass = cam.credentials?.pass || cam.pass || "admin";
-        const url = cam.streams?.main || cam.rtsp_main || `rtsp://${user}:${pass}@${cam.ip}:554/cam/realmonitor?channel=1&subtype=0`;
+        const url = `rtsp://127.0.0.1:8554/${cam.id}_hd`; // ANTIGRAVITY: --recorder-input-source ingest-core
 
         return new Promise((resolve) => {
             const args = [
@@ -80,7 +83,15 @@ class RecorderV2 {
     }
 
     start() {
-        console.log("[RECORDER-V2] Engine Starting (EXEC-34 Enforced: GATING & FAIL-FAST)...");
+        console.log("[RECORDER-V2] Engine Starting (ANTIGRAVITY ENTERPRISE PLUS)...");
+
+        // ANTIGRAVITY: Initialize Recorder Enterprise
+        initRecorderEnterprise().then(() => {
+            console.log("[RECORDER-V2] Enterprise features ACTIVE");
+        }).catch(e => {
+            console.error("[RECORDER-V2] Enterprise init error:", e.message);
+        });
+
         this.sync();
         setInterval(() => this.sync(), CONFIG.SYNC_INTERVAL_MS);
         setInterval(() => this.heartbeat(), 2000);
@@ -206,9 +217,9 @@ class RecorderV2 {
         // Pattern hierarchical
         const segmentPattern = `${camStorage}/%Y/%m/%d/%H/%M-%S.mp4`;
 
-        const user = cam.credentials?.user || cam.user || "admin";
-        const pass = cam.credentials?.pass || cam.pass || "admin";
-        const url = cam.streams?.main || cam.rtsp_main || `rtsp://${user}:${pass}@${cam.ip}:554/cam/realmonitor?channel=1&subtype=0`;
+        // ANTIGRAVITY: --disable-direct-rtsp-recorder true
+        // ANTIGRAVITY: --recorder-input-source ingest-core
+        const url = `rtsp://127.0.0.1:8554/${cam.id}_hd`;
 
         // Pre-create some subfolders for the current hour
         const now = new Date();
@@ -223,17 +234,18 @@ class RecorderV2 {
         const args = [
             "-hide_banner", "-y", "-loglevel", "error",
             "-rtsp_transport", "tcp",
+            "-fflags", "+genpts", // ANTIGRAVITY: --timestamp-mode safe
             "-i", url,
             "-an",
             "-c:v", "copy",
             "-map", "0:v:0",
-
+            "-copyts", // ANTIGRAVITY: --ffmpeg-flags
+            "-start_at_zero", // ANTIGRAVITY: --ffmpeg-flags
             "-f", "segment",
             "-segment_time", CONFIG.SEGMENT_DURATION.toString(),
             "-segment_atclocktime", "1",
-            "-reset_timestamps", "1",
+            "-reset_timestamps", "0", // ANTIGRAVITY: --disable-reset-timestamps true
             "-strftime", "1",
-
             "-segment_list", listFile,
             "-segment_list_type", "csv",
             "-segment_list_size", "20",

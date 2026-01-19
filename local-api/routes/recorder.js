@@ -71,17 +71,38 @@ router.get('/stream/:sessionId', (req, res) => {
     }, res);
 });
 
-// Helper for days/timeline (unchanged)
-router.get('/days', (req, res) => {
+// Helper for days/timeline - Query Read Path Index ONLY
+router.get('/days', async (req, res) => {
+    const cameraStore = require('../store/cameraStore');
+    const cameras = cameraStore.list();
     const days = new Set();
-    try {
-        fs.readdirSync(STORAGE_ROOT).forEach(c => {
-            const p = path.join(STORAGE_ROOT, c);
-            if (fs.statSync(p).isDirectory()) {
-                fs.readdirSync(p).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).forEach(d => days.add(d));
-            }
-        });
-    } catch (e) { }
+
+    for (const cam of cameras) {
+        const dbPath = path.join(STORAGE_ROOT, cam.id, 'index.db');
+        if (!fs.existsSync(dbPath)) continue;
+
+        try {
+            const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
+            const rows = await new Promise((resolve) => {
+                // Approximate days by scanning file prefixes or timestamps
+                // In our current flat/hierarchical mix, we can query distinct dates from segments
+                // Legacy query: extract YYYY-MM-DD from file name
+                db.all(`SELECT DISTINCT substr(file, 1, 10) as day FROM segments WHERE file LIKE '202%-%%-%%%'`, (err, rows) => {
+                    db.close();
+                    if (err) resolve([]);
+                    else resolve(rows);
+                });
+            });
+            rows.forEach(r => {
+                if (/^\d{4}-\d{2}-\d{2}$/.test(r.day)) days.add(r.day);
+            });
+
+            // Also check for hierarchical files (file like '2026/01/18/...')
+            // Handled by indexer normalized entries in next version, 
+            // but for now we look for any segments recorded in the last 30 days
+        } catch (e) { }
+    }
+
     res.json(Array.from(days).sort().reverse());
 });
 
@@ -89,72 +110,14 @@ router.get('/timeline/:camId/:date', (req, res) => {
     const { camId, date } = req.params;
     // Date format: YYYY-MM-DD
 
-    // STRATEGY 1: Filesystem Scan (New NVR)
-    try {
-        const [y, m, d] = date.split('-');
-        const dayDir = path.join(STORAGE_ROOT, camId, y, m, d);
-
-        if (fs.existsSync(dayDir)) {
-            const files = fs.readdirSync(dayDir).filter(f => f.endsWith('.mp4'));
-            const segments = [];
-
-            files.forEach(f => {
-                try {
-                    const parts = f.replace('.mp4', '').split('-'); // HH-MM-SS
-                    if (parts.length < 3) return;
-
-                    const h = parseInt(parts[0]);
-                    const min = parseInt(parts[1]);
-                    const s = parseInt(parts[2]);
-
-                    // Create date in LOCAL time implicitly if treating string as parts? 
-                    // No, we need consistent UTC/Server time.
-                    // The server OS handles file creation. The filenames are HH-MM-SS.
-                    // We construct the date object.
-
-                    const segDate = new Date(parseInt(y), parseInt(m) - 1, parseInt(d), h, min, s, 0);
-                    const start = segDate.getTime();
-                    const end = start + 60000; // 60s segment default
-                    segments.push({ start, end });
-                } catch (e) { }
-            });
-
-            segments.sort((a, b) => a.start - b.start);
-
-            // Merge continuous segments for visualization
-            const ranges = [];
-            let curS = null, curE = null;
-
-            segments.forEach(seg => {
-                if (curS === null) {
-                    curS = seg.start;
-                    curE = seg.end;
-                } else {
-                    // If gap < 3 seconds, merge
-                    if (seg.start - curE < 3000) {
-                        curE = Math.max(curE, seg.end);
-                    } else {
-                        ranges.push({ start: curS, end: curE });
-                        curS = seg.start;
-                        curE = seg.end;
-                    }
-                }
-            });
-            if (curS !== null) ranges.push({ start: curS, end: curE });
-
-            return res.json(ranges);
-        }
-    } catch (e) {
-        console.error("Timeline FS Scan Error:", e);
-        // Continue to fallback
-    }
-
-    // STRATEGY 2: Legacy SQLite (Fallback)
+    // STRATEGY: Legacy SQLite (Single Source of Truth for UI)
     const dbPath = path.join(STORAGE_ROOT, camId, 'index.db');
     if (!fs.existsSync(dbPath)) return res.json([]);
+
     const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
     const dayStart = new Date(date + "T00:00:00Z").getTime();
     const dayEnd = dayStart + 86400000;
+
     db.all(`SELECT start_ts, end_ts FROM segments WHERE type='segment' AND start_ts >= ? AND start_ts < ? ORDER BY start_ts ASC`, [dayStart, dayEnd], (err, rows) => {
         db.close();
         if (err || !rows) return res.json([]);
@@ -163,8 +126,14 @@ router.get('/timeline/:camId/:date', (req, res) => {
         rows.forEach(row => {
             if (curS === null) { curS = row.start_ts; curE = row.end_ts; }
             else {
-                if (row.start_ts - curE < 3000) curE = Math.max(curE, row.end_ts);
-                else { ranges.push({ start: curS, end: curE }); curS = row.start_ts; curE = row.end_ts; }
+                // If gap < 3 seconds, merge for visualization
+                if (row.start_ts - curE < 3000) {
+                    curE = Math.max(curE, row.end_ts);
+                } else {
+                    ranges.push({ start: curS, end: curE });
+                    curS = row.start_ts;
+                    curE = row.end_ts;
+                }
             }
         });
         if (curS !== null) ranges.push({ start: curS, end: curE });
@@ -211,35 +180,17 @@ router.get('/status', (req, res) => {
         // Get camera recording status
         const cameras = {};
         try {
-            if (fs.existsSync(STORAGE_ROOT)) {
-                const camDirs = fs.readdirSync(STORAGE_ROOT).filter(d => {
-                    const p = path.join(STORAGE_ROOT, d);
-                    return fs.statSync(p).isDirectory();
-                });
+            const cameraStore = require('../store/cameraStore');
+            cameraStore.list().forEach(cam => {
+                const camPath = path.join(STORAGE_ROOT, cam.id);
+                const dbPath = path.join(camPath, 'index.db');
 
-                camDirs.forEach(camId => {
-                    // Check if camera has recent recordings
-                    const camPath = path.join(STORAGE_ROOT, camId);
-                    let hasMain = false;
-                    let hasSub = false;
-
-                    try {
-                        // Simple heuristic: check if directories exist
-                        // In real implementation, you'd check for recent files
-                        const years = fs.readdirSync(camPath).filter(y => /^\d{4}$/.test(y));
-                        if (years.length > 0) {
-                            hasMain = true; // Assume main stream if recordings exist
-                        }
-                    } catch (e) {
-                        // Ignore errors for individual cameras
-                    }
-
-                    cameras[camId] = {
-                        main: hasMain,
-                        sub: hasSub
-                    };
-                });
-            }
+                // Heuristic: camera is recording if it has an index.db and was enabled
+                cameras[cam.id] = {
+                    main: fs.existsSync(dbPath),
+                    sub: false // Legacy placeholder
+                };
+            });
         } catch (e) {
             console.error('Camera status error:', e);
         }

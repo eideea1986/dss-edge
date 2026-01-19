@@ -6,7 +6,7 @@ import React, { Suspense, lazy } from "react";
 const Status = lazy(() => import("./pages/Status"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Live = lazy(() => import("./pages/Live"));
-const Playback = lazy(() => import("./pages/PlaybackModern"));
+const Playback = lazy(() => import("./pages/Playback"));
 const Login = lazy(() => import("./pages/Login"));
 const RequireAuth = lazy(() => import("./components/RequireAuth"));
 const ErrorBoundary = lazy(() => import("./components/ErrorBoundary"));

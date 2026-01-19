@@ -86,14 +86,52 @@ const getTimelineDay = (req, res) => {
 
         segments.sort((a, b) => a.start_ts - b.start_ts);
 
+        // --- PLAYBACK STATE DETECTION (EXEC-23) ---
+        const indexReady = fs.existsSync("/run/dss/index.ready");
+        let playbackState = "OK";
+        let stateReason = "";
+
+        // Rule 1: Index rebuilding
+        if (!indexReady) {
+            playbackState = "INDEX_REBUILDING";
+            stateReason = "Indexul este în reconstruire. Datele vor apărea automat.";
+        }
+        // Rule 2: No segments found
+        else if (segments.length === 0) {
+            // Check if ANY recordings exist for this camera (outside this day)
+            const camDir = path.join(STORAGE_ROOT, camId);
+            const hasAnyRecordings = fs.existsSync(camDir) &&
+                fs.readdirSync(camDir).some(item => {
+                    try {
+                        const stat = fs.statSync(path.join(camDir, item));
+                        return stat.isDirectory() && !item.startsWith('.');
+                    } catch (e) { return false; }
+                });
+
+            if (hasAnyRecordings) {
+                playbackState = "TIME_MISMATCH";
+                stateReason = "Intervalul selectat nu conține date. Încercați să selectați o altă dată.";
+            } else {
+                playbackState = "NO_DATA";
+                stateReason = "Nu există înregistrări pentru această cameră.";
+            }
+        }
+
         return res.json({
             dayStart: dayStartTs,
-            segments
+            segments,
+            playback_state: playbackState,
+            state_reason: stateReason
         });
 
     } catch (e) {
         console.error("Timeline FS Error", e);
-        return res.status(500).json({ dayStart: 0, segments: [] });
+        return res.status(500).json({
+            dayStart: 0,
+            segments: [],
+            playback_state: "ERROR",
+            state_reason: "Eroare de sistem la citirea datelor."
+        });
     }
 };
 

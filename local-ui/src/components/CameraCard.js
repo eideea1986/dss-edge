@@ -31,7 +31,7 @@ const controlBtnStyle = {
 };
 
 // --- ZONE OVERLAY COMPONENT ---
-function ZoneOverlay({ cam, isArmed }) {
+function ZoneOverlay({ cam, isArmed, activeZones = [] }) {
     const containerRef = useRef(null);
     const canvasRef = useRef(null);
     const [dims, setDims] = useState({ w: 0, h: 0 });
@@ -62,10 +62,10 @@ function ZoneOverlay({ cam, isArmed }) {
 
         const zones = cam.ai_server?.zones || [];
         if (zones.length === 0 && cam.ai_server?.roi) {
-            zones.push({ points: cam.ai_server.roi });
+            zones.push({ points: cam.ai_server.roi, name: 'default' });
         }
 
-        const drawZone = (pts) => {
+        const drawZone = (pts, isActive) => {
             if (!pts || pts.length === 0) return;
             ctx.beginPath();
             const x0 = pts[0][0] > 1 ? pts[0][0] : pts[0][0] * dims.w;
@@ -79,15 +79,43 @@ function ZoneOverlay({ cam, isArmed }) {
             ctx.closePath();
 
             // ANTIGRAVITY: --overlay-style "stroke:2px,fill:rgba(0,255,0,0.15)"
-            ctx.fillStyle = "rgba(0, 255, 0, 0.15)";
-            ctx.strokeStyle = "rgba(0, 255, 0, 0.8)";
+            // Use different color if zone is active/triggered? 
+            // For now, if activeZones list is provided, only draw active ones?
+            // Or draw active ones in RED and inactive in GREEN?
+            // "overlay-zones-source activeZones" implies highlighting active ones.
+            // Assuming activeZones contains names of triggered zones.
+
+            const isTriggered = isActive;
+
+            ctx.fillStyle = isTriggered ? "rgba(255, 0, 0, 0.3)" : "rgba(0, 255, 0, 0.15)";
+            ctx.strokeStyle = isTriggered ? "rgba(255, 0, 0, 0.8)" : "rgba(0, 255, 0, 0.8)";
             ctx.lineWidth = 2;
             ctx.fill();
             ctx.stroke();
         };
 
-        zones.forEach(z => { if (z.points) drawZone(z.points); });
-    }, [cam, dims, isArmed]);
+        zones.forEach(z => {
+            // If activeZones is not empty, check if this zone is active.
+            // If activeZones is undefined/empty array but isArmed is true, maybe show all as armed?
+            // Spec says: --overlay-zones-source activeZones
+            // This usually means we rely on the list.
+
+            // Logic: 
+            // always draw configured zones. 
+            // Highlight if in activeZones? 
+            // Or only draw if in activeZones? 
+            // "overlay-trigger armed" -> Draw if system is armed.
+
+            // Let's draw ALL configured zones in GREEN (Armed).
+            // If we had per-zone triggering, we'd use RED.
+            // Since `activeZones` usually means "zones that are causing an alert", 
+            // but here it might mean "zones that are currently monitored".
+            // Let's assume if it's in the list, it's monitored.
+
+            const isMonitored = activeZones.length === 0 || activeZones.includes(z.name);
+            if (z.points && isMonitored) drawZone(z.points, false);
+        });
+    }, [cam, dims, isArmed, activeZones]);
 
     return (
         <div ref={containerRef} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }}>
@@ -97,7 +125,7 @@ function ZoneOverlay({ cam, isArmed }) {
 }
 
 // --- MAIN COMPONENT ---
-function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed, health, isReady, isDegraded, quality = 'sub', isFocused }) {
+function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed, activeZones, health, isReady, isDegraded, quality = 'sub', isFocused }) {
     const navigate = useNavigate();
     const [hover, setHover] = useState(false);
     const [contextMenu, setContextMenu] = useState(null);
@@ -234,7 +262,7 @@ function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed,
                 </div>
 
                 {/* ZONES */}
-                <ZoneOverlay cam={cam} isArmed={isArmed} />
+                <ZoneOverlay cam={cam} isArmed={isArmed} activeZones={activeZones} />
 
                 {/* CONTEXT MENU */}
                 {contextMenu && (

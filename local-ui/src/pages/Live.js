@@ -1,41 +1,53 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { API } from "../api";
 import CameraCard from "../components/CameraCard";
-import { formatLocalTime } from '../utils/time';
 
-// Styles
-const colors = {
-    bg: "#1e1e1e",
-    text: "#cccccc",
-    accent: "#007acc"
-};
+/**
+ * LIVE PAGE - AUTHORITATIVE BACKEND MODEL
+ * 
+ * Arming Contract:
+ *   - UI has NO local arming state
+ *   - UI is a PURE MIRROR of backend state
+ *   - On every event: cameraState = backendState (full replace, no merge)
+ *   - Overlay renders based on effectiveArmed + activeZones from backend
+ * 
+ * Profile: authoritative-backend-model
+ *   --arming-authority backend
+ *   --ui-arming-role mirror-only
+ *   --ui-disable-local-arming-state true
+ *   --ui-disable-arming-merge true
+ *   --ui-force-state-replace true
+ */
 
 export default function Live() {
     const [cams, setCams] = useState([]);
     const [status, setStatus] = useState("Checking...");
     const [selectedCam, setSelectedCam] = useState(null);
     const [gridSize, setGridSize] = useState(8);
-    const [armingStatus, setArmingStatus] = useState({});
-    const [systemArmed, setSystemArmed] = useState(false);
     const [camStatus, setCamStatus] = useState({});
 
-    // Grid Virtualization & Focus Policy
+    // BACKEND ARMING STATE - this is the ONLY source of truth
+    // NO local arming flags, NO merge, FULL REPLACE on every update
+    const [backendArmingState, setBackendArmingState] = useState({
+        systemArmed: false,
+        cameras: {} // { [camId]: { effectiveArmed, activeZones, mode, schedule } }
+    });
+
+    // Grid Virtualization
     const [visibleCams, setVisibleCams] = useState(new Set());
     const [focusedCam, setFocusedCam] = useState(null);
     const MAX_ACTIVE_STREAMS = 16;
 
-    // Keyboard Shortcuts (Esc to exit fullscreen)
+    // Keyboard Shortcuts
     useEffect(() => {
         const handleKeys = (e) => {
-            if (e.key === 'Escape' && selectedCam) {
-                setSelectedCam(null);
-            }
+            if (e.key === 'Escape' && selectedCam) setSelectedCam(null);
         };
         window.addEventListener('keydown', handleKeys);
         return () => window.removeEventListener('keydown', handleKeys);
     }, [selectedCam]);
 
-    // Default visible cams on load
+    // Default visible cams
     useEffect(() => {
         if (cams.length > 0 && visibleCams.size === 0) {
             const initial = new Set();
@@ -44,33 +56,32 @@ export default function Live() {
         }
     }, [cams, gridSize]);
 
-    // Poll Arming Status
-    useEffect(() => {
-        const checkArming = () => {
-            API.get("arming-state/state").then(res => {
-                const statusMap = {};
-                setSystemArmed(!!res.data.armed);
-                if (res.data && res.data.cameras) {
-                    Object.keys(res.data.cameras).forEach(camId => {
-                        statusMap[camId] = res.data.cameras[camId].armed;
-                    });
-                }
-                if (!res.data.armed) {
-                    setArmingStatus({});
-                } else {
-                    setArmingStatus(statusMap);
-                }
-            }).catch(err => {
-                setArmingStatus({});
-                setSystemArmed(false);
+    /**
+     * FETCH ARMING STATE FROM BACKEND
+     * This is the ONLY way arming state enters UI
+     * FULL REPLACE - no merge with previous state
+     */
+    const fetchArmingState = useCallback(() => {
+        API.get("arming-state/state").then(res => {
+            // FULL STATE REPLACE - no merge!
+            setBackendArmingState({
+                systemArmed: !!res.data.armed,
+                cameras: res.data.cameras || {}
             });
-        };
-        checkArming();
-        const interval = setInterval(checkArming, 5000);
-        return () => clearInterval(interval);
+        }).catch(() => {
+            // On error, clear state (fail-safe disarm display)
+            setBackendArmingState({ systemArmed: false, cameras: {} });
+        });
     }, []);
 
-    // Poll Config & Status (Standard API)
+    // Poll arming state
+    useEffect(() => {
+        fetchArmingState();
+        const interval = setInterval(fetchArmingState, 5000);
+        return () => clearInterval(interval);
+    }, [fetchArmingState]);
+
+    // Poll camera config & status
     useEffect(() => {
         const fetchCams = () => API.get("cameras/config").then(res => setCams(res.data)).catch(console.error);
         fetchCams();
@@ -93,35 +104,69 @@ export default function Live() {
         return () => { clearInterval(i1); clearInterval(i2); };
     }, []);
 
-    // DSS Event Listener (WebSocket for Arming State)
+    /**
+     * WEBSOCKET - ARMING STATE UPDATES
+     * On receive: FULL STATE REPLACE (no merge!)
+     */
     useEffect(() => {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const dssWsUrl = `${protocol}//${window.location.hostname}:8090`;
+        const wsUrl = `${protocol}//${window.location.hostname}:8090`;
         let ws;
         let reconnectTimer;
+
         const connect = () => {
-            ws = new WebSocket(dssWsUrl);
+            ws = new WebSocket(wsUrl);
+
             ws.onmessage = (event) => {
                 try {
                     const msg = JSON.parse(event.data);
-                    if (msg.type === 'ARMING_STATE_CHANGED') {
-                        setSystemArmed(msg.armed);
-                        if (!msg.armed) setArmingStatus({});
+
+                    if (msg.type === 'ARMING_STATE_CHANGED' || msg.type === 'camera:arming:update') {
+                        // FULL STATE REPLACE - the core fix
+                        if (msg.payload) {
+                            if (msg.payload.cameras) {
+                                // Full state update from backend
+                                setBackendArmingState({
+                                    systemArmed: !!msg.payload.armed,
+                                    cameras: msg.payload.cameras
+                                });
+                            } else if (msg.payload.cameraId) {
+                                // Single camera update - still replace that camera fully
+                                setBackendArmingState(prev => ({
+                                    ...prev,
+                                    cameras: {
+                                        ...prev.cameras,
+                                        [msg.payload.cameraId]: {
+                                            effectiveArmed: msg.payload.effectiveArmed,
+                                            activeZones: msg.payload.activeZones,
+                                            mode: msg.payload.mode
+                                        }
+                                    }
+                                }));
+                            }
+                        } else {
+                            // No payload, refetch full state
+                            fetchArmingState();
+                        }
                     }
-                } catch (e) { }
+                } catch (e) {
+                    console.warn('[Live] WS parse error', e);
+                }
             };
+
             ws.onclose = () => {
                 reconnectTimer = setTimeout(connect, 3000);
             };
         };
+
         connect();
         return () => {
             if (ws) ws.close();
             clearTimeout(reconnectTimer);
         };
-    }, []);
+    }, [fetchArmingState]);
 
-    // IntersectionObserver for Virtualization (Only active when grid visible)
+    // IntersectionObserver for virtualization
     useEffect(() => {
         if (cams.length === 0 || selectedCam) return;
 
@@ -130,11 +175,8 @@ export default function Live() {
                 const next = new Set(prev);
                 entries.forEach(entry => {
                     const id = entry.target.getAttribute('data-cam-id');
-                    if (entry.isIntersecting) {
-                        next.add(id);
-                    } else if (id) {
-                        next.delete(id);
-                    }
+                    if (entry.isIntersecting) next.add(id);
+                    else if (id) next.delete(id);
                 });
                 return next;
             });
@@ -142,16 +184,33 @@ export default function Live() {
 
         const cards = document.querySelectorAll('[data-cam-id]');
         cards.forEach(card => observer.observe(card));
-
         return () => observer.disconnect();
     }, [cams, gridSize, selectedCam]);
 
-    // QUALITY POLICY - ANTIGRAVITY: --pause-background-streams true
+    /**
+     * GET CAMERA ARMING STATE
+     * Pure read from backend state - NO local flags
+     */
+    const getCameraArming = (camId) => {
+        const camState = backendArmingState.cameras[camId];
+        if (camState) {
+            return {
+                isArmed: !!camState.effectiveArmed,
+                activeZones: camState.activeZones || []
+            };
+        }
+        // Fallback to system armed state if no per-camera data
+        return {
+            isArmed: backendArmingState.systemArmed,
+            activeZones: []
+        };
+    };
+
+    // Quality policy
     const getQualityForCam = (camId, idx) => {
         if (selectedCam) {
             return (selectedCam.id === camId) ? 'hd' : 'off';
         }
-
         const isVisible = visibleCams.has(camId) || (idx < 4);
         if (!isVisible) return 'off';
         if (focusedCam === camId) return 'hd';
@@ -159,7 +218,7 @@ export default function Live() {
         return 'sub';
     };
 
-    // Grid Layout Config
+    // Grid config
     const getGridConfig = () => {
         switch (gridSize) {
             case 1: return { cols: "1fr", rows: "1fr" };
@@ -176,12 +235,11 @@ export default function Live() {
     };
 
     const grid = getGridConfig();
-    const capacity = gridSize;
 
     return (
-        <div className="live-page" style={{ width: "100%", height: "100%", background: "#000", color: colors.text, overflow: "hidden", display: "flex", flexDirection: "column", position: "relative" }}>
+        <div style={{ width: "100%", height: "100%", background: "#000", color: "#ccc", overflow: "hidden", display: "flex", flexDirection: "column", position: "relative" }}>
 
-            {/* TOOLBAR - Hidden in Fullscreen Overlay Mode */}
+            {/* TOOLBAR */}
             {!selectedCam && (
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px", background: "#050505", borderBottom: "1px solid #111", height: "30px", zIndex: 100 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 15 }}>
@@ -194,42 +252,40 @@ export default function Live() {
                                 <button key={num} onClick={() => setGridSize(num)} style={{ border: "1px solid #1a1a1a", background: gridSize === num ? "#007acc" : "#0a0a0a", color: "#fff", width: 28, height: 18, cursor: "pointer", fontSize: 9, borderRadius: 2 }}>{num}</button>
                             ))}
                         </div>
+                        <div style={{ fontSize: 9, color: backendArmingState.systemArmed ? '#2ecc71' : '#888' }}>
+                            {backendArmingState.systemArmed ? '🛡️ SISTEM ARMAT' : '⚫ DEZARMAT'}
+                        </div>
                     </div>
                 </div>
             )}
 
-            {/* FULLSCREEN OVERLAY LAYER - ANTIGRAVITY: --fullscreen-mode overlay, --fullscreen-z-index 9999 */}
+            {/* FULLSCREEN OVERLAY */}
             {selectedCam && (
-                <div style={{
-                    position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-                    background: "#000", zIndex: 9999, display: "flex"
-                }}>
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: "#000", zIndex: 9999, display: "flex" }}>
                     <CameraCard
                         cam={selectedCam}
                         isMaximized={true}
                         isHidden={false}
                         onMaximise={() => setSelectedCam(null)}
-                        isArmed={armingStatus[selectedCam.id] !== undefined ? armingStatus[selectedCam.id] : systemArmed}
+                        {...getCameraArming(selectedCam.id)}
                         health={camStatus[selectedCam.id]}
                         isReady={camStatus[selectedCam.id]?.connected === true}
-                        isDegraded={(armingStatus[selectedCam.id] !== undefined ? armingStatus[selectedCam.id] : systemArmed) && camStatus[selectedCam.id]?.connected !== true}
                         quality="hd"
                         isFocused={true}
                     />
                 </div>
             )}
 
-            {/* GRID LAYER - ANTIGRAVITY: --grid-visibility hidden when fullscreen */}
+            {/* GRID */}
             <div style={{
                 display: "grid", gridTemplateColumns: grid.cols, gridTemplateRows: grid.rows, gap: 2,
                 flex: 1, background: "#000", padding: 2, overflowY: "auto", overflowX: "hidden",
                 visibility: selectedCam ? "hidden" : "visible",
                 pointerEvents: selectedCam ? "none" : "auto"
             }}>
-                {cams.map((cam, idx) => {
-                    const isVisibleSlot = (idx < capacity);
-                    if (!isVisibleSlot) return null;
+                {cams.slice(0, gridSize).map((cam, idx) => {
                     const quality = getQualityForCam(cam.id, idx);
+                    const arming = getCameraArming(cam.id);
 
                     return (
                         <div key={cam.id} data-cam-id={cam.id}
@@ -244,12 +300,13 @@ export default function Live() {
                             <CameraCard
                                 cam={cam}
                                 isMaximized={false}
-                                isHidden={!isVisibleSlot}
+                                isHidden={false}
                                 onMaximise={(c) => setSelectedCam(c)}
-                                isArmed={armingStatus[cam.id] !== undefined ? armingStatus[cam.id] : systemArmed}
+                                isArmed={arming.isArmed}
+                                activeZones={arming.activeZones}
                                 health={camStatus[cam.id]}
                                 isReady={camStatus[cam.id]?.connected === true}
-                                isDegraded={(armingStatus[cam.id] !== undefined ? armingStatus[cam.id] : systemArmed) && camStatus[cam.id]?.connected !== true}
+                                isDegraded={arming.isArmed && camStatus[cam.id]?.connected !== true}
                                 quality={quality}
                                 isFocused={focusedCam === cam.id}
                             />
