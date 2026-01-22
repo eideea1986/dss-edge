@@ -1,238 +1,206 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
+import connectionPool from "../services/ConnectionPool"; // NEW
 
 /**
- * SMART DUAL STREAM MANAGER - Trassir-like with Smart Warm Standby
+ * SMART ENTERPRISE PLAYER - ZERO STUTTER ARCHITECTURE
  * 
- * ARCHITECTURE:
- * - Grid: substream only (low CPU)
- * - Hover: pre-connect main stream (warm standby)
- * - Fullscreen: instant switch (main already connected)
+ * Optimized for high-density grids (32+ cameras)
  * 
- * CPU OPTIMIZATION:
- * - Only 1 main stream in warm standby at a time
- * - Grid idle: minimal overhead (25 substreams only)
- * - Switch: <200ms (connection already established)
+ * Version: 2.1 (Performance Stabilized)
  */
 
 const GO2RTC_API = `${window.location.origin}/rtc`;
-const streamPool = new Map();
 
-/**
- * Acquire WebRTC stream (reuses existing connections)
- */
-async function acquireStream(camId, type = "sub") {
-    const key = `${camId}_${type}`;
-
-    if (streamPool.has(key)) {
-        const entry = streamPool.get(key);
-        entry.refs++;
-        console.log(`[SmartDual] Reusing ${key}, refs: ${entry.refs}`);
-        return entry;
+// Singleton Manager for WebRTC sessions
+class WebRTCManager {
+    constructor() {
+        this.cache = new Map(); // key -> { pc, media, refs, lastActive }
+        this.cleanupTimer = null;
     }
 
-    console.log(`[SmartDual] Creating WebRTC for ${key}`);
-    const pc = new RTCPeerConnection({ iceServers: [] });
-    const media = new MediaStream();
+    async acquire(camId, type = "sub") {
+        const key = `${camId}_${type}`;
 
-    pc.ontrack = (e) => {
-        console.log(`[SmartDual] Track received for ${key}`);
-        media.addTrack(e.track);
-    };
+        if (this.cache.has(key)) {
+            const entry = this.cache.get(key);
+            entry.refs++;
+            entry.lastActive = Date.now();
+            console.log(`[WebRTC] Reusing ${key} (refs: ${entry.refs})`);
+            return entry;
+        }
 
-    pc.addTransceiver("video", { direction: "recvonly" });
-
-    try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-
-        const res = await fetch(`${GO2RTC_API}/api/webrtc?src=${key}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/sdp" },
-            body: offer.sdp
+        console.log(`[WebRTC] Initializing new stream: ${key}`);
+        const pc = new RTCPeerConnection({
+            iceServers: [],
+            bundlePolicy: 'max-bundle',
+            rtcpMuxPolicy: 'require'
         });
 
-        if (!res.ok) {
-            throw new Error(`WebRTC failed: ${res.status}`);
+        const media = new MediaStream();
+
+        pc.ontrack = (e) => {
+            if (e.track.kind === 'video') {
+                console.log(`[WebRTC] Track added for ${key}`);
+                media.addTrack(e.track);
+            }
+        };
+
+        const transceiver = pc.addTransceiver("video", { direction: "recvonly" });
+        // Force H264 to prevent go2rtc CPU spikes from VP8 transcoding
+        if (transceiver.setCodecPreferences && window.RTCRtpReceiver && RTCRtpReceiver.getCapabilities) {
+            const capabilities = RTCRtpReceiver.getCapabilities('video');
+            const h264Codecs = capabilities.codecs.filter(c => c.mimeType === 'video/H264');
+            if (h264Codecs.length > 0) transceiver.setCodecPreferences(h264Codecs);
         }
 
-        const answer = await res.text();
-        await pc.setRemoteDescription({ type: "answer", sdp: answer });
+        try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
 
-        const entry = { pc, media, refs: 1 };
-        streamPool.set(key, entry);
-        return entry;
-    } catch (err) {
-        pc.close();
-        throw err;
-    }
-}
-
-/**
- * Release stream (with grace period)
- */
-function releaseStream(camId, type = "sub") {
-    const key = `${camId}_${type}`;
-    const entry = streamPool.get(key);
-    if (!entry) return;
-
-    entry.refs--;
-    console.log(`[SmartDual] Released ${key}, refs: ${entry.refs}`);
-
-    if (entry.refs <= 0) {
-        setTimeout(() => {
-            const currentEntry = streamPool.get(key);
-            if (currentEntry && currentEntry.refs <= 0) {
-                console.log(`[SmartDual] Closing idle ${key}`);
-                currentEntry.pc.close();
-                streamPool.delete(key);
-            }
-        }, 5000); // 5s grace period (shorter for faster cleanup)
-    }
-}
-
-/**
- * SMART DUAL STREAM PLAYER
- */
-export default function SmartDualStreamPlayer({ camId, isFullscreen, isHidden, isHovered, posterUrl, style }) {
-    const videoRef = useRef(null);
-    const [subStream, setSubStream] = useState(null);
-    const [mainStream, setMainStream] = useState(null);
-    const [currentStream, setCurrentStream] = useState("sub");
-    const [posterVisible, setPosterVisible] = useState(true);
-
-    // Reset poster visibility when switching modes or cameras
-    useEffect(() => {
-        setPosterVisible(true);
-    }, [camId, isFullscreen]);
-
-    // Handle video play event to hide poster
-    const handleCanPlay = () => {
-        // Delay slighty to ensure frame is rendered
-        // setTimeout(() => setPosterVisible(false), 100);
-        setPosterVisible(false);
-    };
-
-    // Always acquire substream
-    useEffect(() => {
-        if (isHidden || !camId) return;
-
-        let active = true;
-        let subEntry;
-
-        acquireStream(camId, "sub")
-            .then((sub) => {
-                if (!active) {
-                    releaseStream(camId, "sub");
-                    return;
-                }
-                subEntry = sub;
-                setSubStream(sub);
-
-                // Attach substream to video if not fullscreen
-                if (videoRef.current && !isFullscreen) {
-                    videoRef.current.srcObject = sub.media;
-                    videoRef.current.play().catch(() => { });
-                }
-            })
-            .catch((err) => {
-                console.error(`[SmartDual] Error for sub ${camId}:`, err);
+            const res = await fetch(`${GO2RTC_API}/api/webrtc?src=${key}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/sdp" },
+                body: offer.sdp
             });
 
+            if (!res.ok) throw new Error(`Status ${res.status}`);
+
+            const answer = await res.text();
+            await pc.setRemoteDescription({ type: "answer", sdp: answer });
+
+            const entry = { pc, media, refs: 1, lastActive: Date.now() };
+            this.cache.set(key, entry);
+            return entry;
+        } catch (err) {
+            console.error(`[WebRTC] Setup failed for ${key}:`, err);
+            pc.close();
+            throw err;
+        }
+    }
+
+    release(camId, type = "sub") {
+        const key = `${camId}_${type}`;
+        const entry = this.cache.get(key);
+        if (!entry) return;
+
+        entry.refs--;
+        console.log(`[WebRTC] Released ${key} (refs: ${entry.refs})`);
+
+        if (entry.refs <= 0) {
+            // Enterprise Stability: 10s idle timeout to prevent flapping during rapid switching or scrolling
+            setTimeout(() => {
+                const current = this.cache.get(key);
+                if (current && current.refs <= 0) {
+                    console.log(`[WebRTC] Disconnecting idle stream: ${key}`);
+                    current.pc.close();
+                    this.cache.delete(key);
+                }
+            }, 10000);
+        }
+    }
+}
+
+const manager = new WebRTCManager();
+
+export default function SmartDualStreamPlayer({ camId, isFullscreen, isHidden, isHovered, quality = 'sub', posterUrl, style }) {
+    const videoRef = useRef(null);
+    const [activeStream, setActiveStream] = useState(null);
+    const [currentMode, setCurrentMode] = useState('off');
+    const [isPlaying, setIsPlaying] = useState(false);
+
+    // Determine target quality based on priority
+    const targetMode = useMemo(() => {
+        if (isHidden) return 'off';
+        if (isFullscreen) return 'hd';
+        return quality;
+    }, [isHidden, isFullscreen, quality]);
+
+    useEffect(() => {
+        if (targetMode === 'off' || !camId) {
+            if (activeStream) {
+                manager.release(camId, currentMode);
+                connectionPool.releaseSlot(); // release slot when stopping
+                setActiveStream(null);
+                setCurrentMode('off');
+                setIsPlaying(false);
+            }
+            return;
+        }
+
+        let isMounted = true;
+        const previousMode = currentMode;
+
+        console.log(`[Player] ${camId} -> Target: ${targetMode} (prev: ${previousMode})`);
+
+        // Acquire a connection slot before creating the WebRTC stream
+        connectionPool.acquireSlot().then(() => {
+            if (!isMounted) {
+                // Component unmounted before slot granted
+                connectionPool.releaseSlot();
+                return;
+            }
+            manager.acquire(camId, targetMode).then(stream => {
+                if (!isMounted) {
+                    manager.release(camId, targetMode);
+                    connectionPool.releaseSlot();
+                    return;
+                }
+
+                if (previousMode !== 'off' && previousMode !== targetMode) {
+                    manager.release(camId, previousMode);
+                }
+
+                setActiveStream(stream);
+                setCurrentMode(targetMode);
+
+                if (videoRef.current && videoRef.current.srcObject !== stream.media) {
+                    videoRef.current.srcObject = stream.media;
+                    videoRef.current.play().catch(() => { });
+                }
+            }).catch(err => {
+                console.error(`[Player] ${camId} failed to load ${targetMode}`, err);
+                // Release slot on error to avoid dead‑lock
+                connectionPool.releaseSlot();
+            });
+        });
+
         return () => {
-            active = false;
-            if (subEntry) releaseStream(camId, "sub");
+            isMounted = false;
         };
-    }, [camId, isHidden, isFullscreen]);
+    }, [camId, targetMode]);
 
-    // SMART WARM STANDBY with DEBOUNCE: Pre-connect main stream on sustained HOVER or FULLSCREEN
+    // Ensure video is playing if activeStream exists but video is paused
     useEffect(() => {
-        let debounceTimer;
-        let mainEntry;
+        if (videoRef.current && activeStream && videoRef.current.paused) {
+            videoRef.current.play().catch(() => { });
+        }
+    }, [activeStream]);
 
-        const cleanup = () => {
-            if (debounceTimer) clearTimeout(debounceTimer);
-            if (mainEntry) releaseStream(camId, "hd");
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            if (camId && currentMode !== 'off') {
+                manager.release(camId, currentMode);
+            }
         };
+    }, []);
 
-        // Immediate connection for fullscreen
-        if (isFullscreen && !isHidden && camId) {
-            acquireStream(camId, "hd")
-                .then((main) => {
-                    mainEntry = main;
-                    setMainStream(main);
-                    if (videoRef.current) {
-                        videoRef.current.srcObject = main.media;
-                        videoRef.current.play().catch(() => { });
-                        setCurrentStream("main");
-                    }
-                })
-                .catch((err) => console.error(`[SmartDual] Error for main ${camId}:`, err));
-        }
-        // Debounced connection for hover (800ms delay)
-        else if (isHovered && !isHidden && camId && !isFullscreen) {
-            debounceTimer = setTimeout(() => {
-                console.log(`[SmartDual] Hover sustained - pre-connecting main for ${camId}`);
-                acquireStream(camId, "hd")
-                    .then((main) => {
-                        mainEntry = main;
-                        setMainStream(main);
-                        // Don't attach - warm standby only
-                    })
-                    .catch((err) => console.error(`[SmartDual] Error for main ${camId}:`, err));
-            }, 800);
-        }
-        // Release main stream when not needed
-        else if (mainStream && !isFullscreen && !isHovered) {
-            releaseStream(camId, "hd");
-            setMainStream(null);
-        }
-
-        return cleanup;
-    }, [isHovered, isFullscreen, camId, isHidden]);
-
-    // INSTANT SWITCH when fullscreen changes
-    useEffect(() => {
-        if (!videoRef.current) return;
-
-        // Show poster briefly on switch
-        setPosterVisible(true);
-
-        if (isFullscreen && mainStream) {
-            // Switch to main
-            console.log(`[SmartDual] Switching to MAIN for ${camId}`);
-            videoRef.current.srcObject = mainStream.media;
-            videoRef.current.play().catch(() => { });
-            setCurrentStream("main");
-        } else if (!isFullscreen && subStream) {
-            // Switch back to sub
-            console.log(`[SmartDual] Switching to SUB for ${camId}`);
-            videoRef.current.srcObject = subStream.media;
-            videoRef.current.play().catch(() => { });
-            setCurrentStream("sub");
-        }
-    }, [isFullscreen, subStream, mainStream, camId]);
+    const handlePlaying = () => setIsPlaying(true);
+    const handleWaiting = () => setIsPlaying(false);
 
     return (
-        <div style={{ ...style, position: "relative", background: "#000", width: "100%", height: "100%", overflow: "hidden" }}>
-            {/* STATIC POSTER (Zero Latency UX) */}
-            {posterUrl && (
+        <div style={{ ...style, position: "relative", background: "#000", overflow: "hidden" }}>
+            {/* POSTER (Visible only if not playing) */}
+            {posterUrl && !isPlaying && (
                 <img
                     src={posterUrl}
-                    loading="eager"
+                    alt=""
                     style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "fill",
-                        zIndex: 10,
-                        opacity: posterVisible ? 1 : 0,
-                        transition: "opacity 150ms ease-out",
+                        position: "absolute", top: 0, left: 0, width: "100%", height: "100%",
+                        objectFit: "fill", zIndex: 1,
                         pointerEvents: "none"
                     }}
                     onError={(e) => e.target.style.display = 'none'}
-                    alt=""
                 />
             )}
 
@@ -241,30 +209,20 @@ export default function SmartDualStreamPlayer({ camId, isFullscreen, isHidden, i
                 autoPlay
                 muted
                 playsInline
-                onPlaying={handleCanPlay}
+                onPlaying={handlePlaying}
+                onWaiting={handleWaiting}
+                onCanPlay={() => videoRef.current.play()}
                 style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "fill",
-                    position: "absolute",
-                    top: 0,
-                    left: 0
+                    width: "100%", height: "100%", objectFit: "fill",
+                    background: "#000",
+                    display: targetMode === 'off' ? 'none' : 'block'
                 }}
             />
-            {/* Debug indicator */}
-            {process.env.NODE_ENV === 'development' && (
-                <div style={{
-                    position: "absolute",
-                    top: 4,
-                    right: 4,
-                    background: "rgba(0,0,0,0.7)",
-                    color: mainStream ? "#0f0" : "#ff0",
-                    padding: "2px 6px",
-                    fontSize: 10,
-                    fontFamily: "monospace",
-                    zIndex: 20
-                }}>
-                    {currentStream.toUpperCase()} {mainStream && !isFullscreen ? "(STANDBY)" : ""}
+
+            {/* ERROR/LOADING OVERLAY */}
+            {targetMode !== 'off' && !isPlaying && (
+                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.3)", zIndex: 2 }}>
+                    <div style={{ fontSize: 9, color: "#aaa" }}>...</div>
                 </div>
             )}
         </div>

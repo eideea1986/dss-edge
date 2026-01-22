@@ -8,7 +8,9 @@ const livePlaylist = require('../playback/livePlaylist');
 router.get('/live/:camId.m3u8', livePlaylist.getLivePlaylist);
 
 // MSE/JSON Routes
+router.get('/playlist/:camId.m3u8', controller.getPlaylistM3U8);
 router.get('/playlist/:camId', controller.getPlaylist);
+router.get('/stream-hls/:camId/:file', controller.streamSegmentHLS);
 router.get('/stream/:camId/:file', controller.streamSegment);
 
 // Stats/Timeline

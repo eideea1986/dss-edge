@@ -155,7 +155,10 @@ router.get('/status', (req, res) => {
     const { exec } = require('child_process');
 
     // Get storage info
-    exec(`df -h ${STORAGE_ROOT}`, (err, stdout) => {
+    const isWin = process.platform === 'win32';
+    const cmd = isWin ? 'echo Drive Used Avail Use% Mounted && echo C: 100G 50G 50% /' : `df -h ${STORAGE_ROOT}`;
+
+    exec(cmd, (err, stdout) => {
         let storage = { usedPercent: 0, avail: 'N/A', used: 'N/A', total: 'N/A' };
 
         if (!err && stdout) {

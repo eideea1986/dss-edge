@@ -54,18 +54,18 @@ if (wss) {
     });
 }
 
-// --- ARMING STATE WATCHER (EXEC-32) ---
-const redisEventSub = new Redis();
-redisEventSub.subscribe("arming:changed", (err) => {
-    if (err) console.error("[Redis] Subscription Error:", err.message);
+// --- REAL-TIME TIMELINE PUSH (PATCH 3) ---
+const eventBus = require("../modules/core/eventBus");
+eventBus.subscribe("timeline:update");
+eventBus.subscribe("arming:changed");
+
+eventBus.on("timeline:update", (payload) => {
+    // TIMELINE PUSH (UI VEDE IMEDIAT)
+    app.broadcastEvent('timeline:update', payload);
 });
-redisEventSub.on("message", (channel, message) => {
-    if (channel === "arming:changed") {
-        try {
-            const data = JSON.parse(message);
-            app.broadcastEvent('ARMING_STATE_CHANGED', data);
-        } catch (e) { }
-    }
+
+eventBus.on("arming:changed", (data) => {
+    app.broadcastEvent('ARMING_STATE_CHANGED', data);
 });
 
 // --- PROXY DEFINITIONS ---
@@ -490,6 +490,10 @@ app.use("/playback", playbackRoutes);
 
 const armingStateRoutes = require("./routes/arming-state");
 app.use("/api/arming-state", armingStateRoutes);
+
+const liveRoutes = require("./routes/live");
+app.use("/api/live", liveRoutes);
+app.use("/go2rtc", liveRoutes); // Alias for UI fetch requests
 
 const armingRoutes = require("./routes/arming");
 app.use("/api/arming", armingRoutes);

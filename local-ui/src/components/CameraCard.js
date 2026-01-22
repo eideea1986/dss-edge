@@ -127,8 +127,19 @@ function ZoneOverlay({ cam, isArmed, activeZones = [] }) {
 // --- MAIN COMPONENT ---
 function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed, activeZones, health, isReady, isDegraded, quality = 'sub', isFocused }) {
     const navigate = useNavigate();
+    const containerRef = useRef(null);
     const [hover, setHover] = useState(false);
     const [contextMenu, setContextMenu] = useState(null);
+    const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
+
+    // Sync Native Fullscreen State
+    useEffect(() => {
+        const handleChange = () => {
+            setIsNativeFullscreen(!!document.fullscreenElement);
+        };
+        document.addEventListener("fullscreenchange", handleChange);
+        return () => document.removeEventListener("fullscreenchange", handleChange);
+    }, []);
 
     // Hover Preview Logic
     const [hoverCount, setHoverCount] = useState(0);
@@ -166,42 +177,45 @@ function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed,
         return "#888";                   // disarmed = gray
     };
 
+    const handleFullscreen = (e) => {
+        if (e) e.stopPropagation();
+
+        // ANTIGRAVITY: "EXPLICIT" Native Fullscreen - Keep same video element
+        if (document.fullscreenElement) {
+            document.exitFullscreen().catch(err => console.error("Exit Fullscreen Error:", err));
+        } else if (containerRef.current && containerRef.current.requestFullscreen) {
+            containerRef.current.requestFullscreen().catch(err => {
+                console.error("Enter Fullscreen Error:", err);
+                // Fallback to legacy React-based maximize if native fails (unlikely)
+                onMaximise(cam);
+            });
+        } else {
+            onMaximise(cam);
+        }
+    };
+
     return (
-        <div style={{ ...containerStyle, cursor: isMaximized ? "default" : "pointer" }}
+        <div ref={containerRef} style={{ ...containerStyle, cursor: isMaximized ? "default" : "pointer" }}
             onMouseEnter={() => setHover(true)}
             onMouseLeave={() => setHover(false)}
             onContextMenu={handleContextMenu}
-            onClick={() => !isMaximized && onMaximise(cam)} // Grid click -> Fullscreen
+            onClick={() => !isMaximized && onMaximise(cam)} // Grid click -> Internal Maximize (App Overlay)
             onDoubleClick={(e) => {
-                if (isMaximized) {
-                    e.stopPropagation();
-                    onMaximise(null); // Fullscreen double click -> Close
-                }
+                e.stopPropagation();
+                onMaximise(cam);
             }}
         >
             {/* VIDEO AREA */}
             <div style={{ flex: 1, position: "relative", background: "#000", overflow: "hidden" }}>
-                {quality !== 'off' ? (
-                    isMaximized ? (
-                        <MSEPlayer
-                            url={`ws://${window.location.hostname}:1984/api/ws?src=${cam.id}`}
-                            camId={cam.id}
-                        />
-                    ) : (
-                        <DualStreamPlayer
-                            camId={cam.id}
-                            isFullscreen={isMaximized}
-                            isHidden={isHidden}
-                            isHovered={isActuallyHovered}
-                            posterUrl={`/snapshots/${cam.id}.jpg`}
-                            style={{ width: "100%", height: "100%" }}
-                        />
-                    )
-                ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#111', fontSize: 10 }}>
-                        PAUSED
-                    </div>
-                )}
+                <DualStreamPlayer
+                    camId={cam.id}
+                    isFullscreen={isMaximized || isNativeFullscreen}
+                    isHidden={isHidden}
+                    isHovered={isActuallyHovered}
+                    quality={quality}
+                    posterUrl={`/snapshots/${cam.id}.jpg`}
+                    style={{ width: "100%", height: "100%" }}
+                />
 
                 {/* UX BADGES / ICONS */}
                 <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 6, zIndex: 10 }}>
@@ -227,11 +241,6 @@ function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed,
                         {isDegraded ? "ALERTA" : (isArmed ? "ARMAT" : "DEZARMAT")}
                     </div>
 
-                    {isMaximized && (
-                        <div style={{ background: "rgba(0,0,0,0.6)", color: "#2ecc71", padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: "bold", border: "1px solid #2ecc71" }}>
-                            MAINSTREAM • 15 FPS
-                        </div>
-                    )}
                 </div>
 
                 {/* INTERACTIVE OVERLAY */}
@@ -255,8 +264,9 @@ function CameraCard({ cam, isMaximized, isHidden, onUpdate, onMaximise, isArmed,
                         </button>
 
                         <button style={controlBtnStyle} title={isMaximized ? "Minimizeaza" : "Maximizeaza"}
-                            onClick={(e) => { e.stopPropagation(); onMaximise(isMaximized ? null : cam); }}>
-                            {isMaximized ? <Minimize size={16} /> : <Maximize size={16} />}
+                            onClick={handleFullscreen}>
+                            {/* Icon might be inverted based on native state, but this logic is sufficient */}
+                            <Maximize size={16} />
                         </button>
                     </div>
                 </div>

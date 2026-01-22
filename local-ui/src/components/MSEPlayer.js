@@ -115,10 +115,10 @@ function MSEPlayer({ camId, streamType = 'hd', style, onClick, onDoubleClick, is
                 });
 
             } catch (e) {
-                console.error("[MSE] Init Error:", e);
+                console.error(`[MSE] Init Error for ${streamName}:`, e);
                 if (isMounted) {
                     setStatus("error");
-                    setErrorMsg(e.message);
+                    setErrorMsg(e.message || "Unknown MSE Error");
                 }
             }
         };

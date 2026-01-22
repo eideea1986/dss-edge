@@ -211,10 +211,21 @@ export default function Live() {
         if (selectedCam) {
             return (selectedCam.id === camId) ? 'hd' : 'off';
         }
-        const isVisible = visibleCams.has(camId) || (idx < 4);
-        if (!isVisible) return 'off';
+
+        // Priority 1: Focused camera is ALWAYS HD (Pre-emptive)
         if (focusedCam === camId) return 'hd';
-        if (visibleCams.size > MAX_ACTIVE_STREAMS) return 'low';
+
+        // Priority 2: Viewport Visibility
+        const isVisible = visibleCams.has(camId);
+        if (!isVisible) return 'off';
+
+        // Priority 3: Limit active WebRTC streams to prevent browser lag
+        // In extreme grids (32), we only keep the most visible ones active
+        if (idx >= MAX_ACTIVE_STREAMS && visibleCams.size > MAX_ACTIVE_STREAMS) {
+            // Keep first N visible ones active, others standby
+            return 'off';
+        }
+
         return 'sub';
     };
 
@@ -276,44 +287,44 @@ export default function Live() {
                 </div>
             )}
 
-            {/* GRID */}
-            <div style={{
-                display: "grid", gridTemplateColumns: grid.cols, gridTemplateRows: grid.rows, gap: 2,
-                flex: 1, background: "#000", padding: 2, overflowY: "auto", overflowX: "hidden",
-                visibility: selectedCam ? "hidden" : "visible",
-                pointerEvents: selectedCam ? "none" : "auto"
-            }}>
-                {cams.slice(0, gridSize).map((cam, idx) => {
-                    const quality = getQualityForCam(cam.id, idx);
-                    const arming = getCameraArming(cam.id);
+            {/* GRID - UNMOUNTED WHEN MAXIMIZED TO FREE RESOURCES */}
+            {!selectedCam && (
+                <div style={{
+                    display: "grid", gridTemplateColumns: grid.cols, gridTemplateRows: grid.rows, gap: 2,
+                    flex: 1, background: "#000", padding: 2, overflowY: "auto", overflowX: "hidden"
+                }}>
+                    {cams.slice(0, gridSize).map((cam, idx) => {
+                        const quality = getQualityForCam(cam.id, idx);
+                        const arming = getCameraArming(cam.id);
 
-                    return (
-                        <div key={cam.id} data-cam-id={cam.id}
-                            style={{
-                                position: "relative", width: "100%", height: "100%",
-                                minHeight: gridSize > 16 ? "100px" : "150px",
-                                background: "#000", overflow: "hidden"
-                            }}
-                            onMouseEnter={() => setFocusedCam(cam.id)}
-                            onMouseLeave={() => setFocusedCam(null)}
-                        >
-                            <CameraCard
-                                cam={cam}
-                                isMaximized={false}
-                                isHidden={false}
-                                onMaximise={(c) => setSelectedCam(c)}
-                                isArmed={arming.isArmed}
-                                activeZones={arming.activeZones}
-                                health={camStatus[cam.id]}
-                                isReady={camStatus[cam.id]?.connected === true}
-                                isDegraded={arming.isArmed && camStatus[cam.id]?.connected !== true}
-                                quality={quality}
-                                isFocused={focusedCam === cam.id}
-                            />
-                        </div>
-                    );
-                })}
-            </div>
+                        return (
+                            <div key={cam.id} data-cam-id={cam.id}
+                                style={{
+                                    position: "relative", width: "100%", height: "100%",
+                                    minHeight: gridSize > 16 ? "100px" : "150px",
+                                    background: "#000", overflow: "hidden"
+                                }}
+                                onMouseEnter={() => setFocusedCam(cam.id)}
+                                onMouseLeave={() => setFocusedCam(null)}
+                            >
+                                <CameraCard
+                                    cam={cam}
+                                    isMaximized={false}
+                                    isHidden={false}
+                                    onMaximise={(c) => setSelectedCam(c)}
+                                    isArmed={arming.isArmed}
+                                    activeZones={arming.activeZones}
+                                    health={camStatus[cam.id]}
+                                    isReady={camStatus[cam.id]?.connected === true}
+                                    isDegraded={arming.isArmed && camStatus[cam.id]?.connected !== true}
+                                    quality={quality}
+                                    isFocused={focusedCam === cam.id}
+                                />
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
 
             <style>{`
                 video, img { width: 100% !important; height: 100% !important; object-fit: fill !important; background: #000; }
